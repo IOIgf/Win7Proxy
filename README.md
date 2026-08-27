@@ -65,11 +65,18 @@ Shadowsocks/SS2022、Socks、HTTP 等主流协议。流量接管方式为 **系�
 ## 六、从源码构建（开发者）
 
 在 Windows 上用 Visual Studio 2019/2022 打开 `Win7Proxy.sln` 直接生成即可。
-也可在 Linux/macOS 用 .NET SDK 交叉编译：
+也可在 Linux/macOS 用 .NET SDK 交叉编译（编译目标为 `net461`，兼容 Win7 的 .NET 4.6.1+）：
 
 ```
-dotnet build Win7Proxy/Win7Proxy.csproj -c Release -f net48
+dotnet build Win7Proxy/Win7Proxy.csproj -c Release -f net461
 ```
 
-（需 `Microsoft.NETFramework.ReferenceAssemblies.net48` 提供 net48 引用程序集。）
+（需 `Microsoft.NETFramework.ReferenceAssemblies.net461` 提供 net461 引用程序集；
+`ProxyCore` 同时多目标 `net461;net8.0`，被 GUI 引用时取 net461。）
 逻辑层 `ProxyCore` 可单独用 `dotnet test ProxyCore.Tests/ProxyCore.Tests.csproj` 跑单元测试。
+
+### 自动构建与发布
+
+仓库已配置 GitHub Actions（`.github/workflows/build.yml`）：推送 `main` 或手动触发时，
+会在 Linux  runner 上构建 `net461` Release，并把产物打包成 `Win7Proxy-v1.0.zip` 作为构件上传；
+打 `v*` 标签（如 `v1.0.0`）推送时，会自动创建 GitHub Release 并附上该 zip，无需本地手工打包。

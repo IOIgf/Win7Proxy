@@ -1,0 +1,55 @@
+name: Build Win7Proxy
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore & Build (net461)
+        run: dotnet build Win7Proxy/Win7Proxy.csproj -c Release -f net461
+
+      - name: Package release zip
+        run: |
+          VER="${GITHUB_REF_NAME:-1.0.0}"
+          OUT="Win7Proxy-$VER"
+          mkdir -p "$OUT/Rules"
+          cp Win7Proxy/bin/Release/net461/Win7Proxy.exe "$OUT/"
+          cp ProxyCore/bin/Release/net461/ProxyCore.dll "$OUT/"
+          for d in Microsoft.Win32.Registry Newtonsoft.Json System.Security.AccessControl System.Security.Principal.Windows YamlDotNet; do
+            if [ -f "Win7Proxy/bin/Release/net461/$d.dll" ]; then
+              cp "Win7Proxy/bin/Release/net461/$d.dll" "$OUT/"
+            elif [ -f "ProxyCore/bin/Release/net461/$d.dll" ]; then
+              cp "ProxyCore/bin/Release/net461/$d.dll" "$OUT/"
+            fi
+          done
+          cp Win7Proxy/bin/Release/net461/Win7Proxy.exe.config "$OUT/"
+          cp README.md fetch-core.bat "$OUT/"
+          cp Rules/pac-rules.txt "$OUT/Rules/"
+          python3 -c "import zipfile,os; z=zipfile.ZipFile('Win7Proxy-v1.0.zip','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'$OUT')) for r,_,fs in os.walk('$OUT') for f in fs]; z.close()"
+          echo "打包完成: $(ls -la Win7Proxy-v1.0.zip | awk '{print $5}') bytes"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Win7Proxy
+          path: Win7Proxy-v1.0.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Win7Proxy-v1.0.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
