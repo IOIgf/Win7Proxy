@@ -1,0 +1,19 @@
+# .NET build outputs
+bin/
+obj/
+stage/
+
+# Bundled .NET SDK used for Linux cross-build (not part of source)
+.dotnet/
+
+# Release artifact (publish via GitHub Releases instead)
+Win7Proxy-v1.0.zip
+
+# Agent / tooling state
+.omo/
+
+# IDE / OS noise
+.vs/
+*.user
+*.suo
+Thumbs.db
