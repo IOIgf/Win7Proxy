@@ -26,12 +26,23 @@ namespace Win7Proxy
         private int _sortCol = -1;
         private bool _sortAsc = true;
         private bool _realExit = false;
+        private Button _testBtn;
+        private readonly HashSet<int> _testingRows = new HashSet<int>();
+        private readonly object _testingLock = new object();
+        private System.Windows.Forms.Timer _spinTimer;
+        private int _spinFrame;
 
         public MainForm()
         {
             _state = AppState.Load();
 
+            string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
+            Icon appIcon = null;
+            try { if (File.Exists(iconPath)) appIcon = new Icon(iconPath); }
+            catch { appIcon = null; }
+
             Text = "Win7Proxy";
+            Icon = appIcon ?? SystemIcons.Application;
             Width = 820; Height = 560;
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9F);
@@ -74,7 +85,7 @@ namespace Win7Proxy
                 BackColor = Color.Transparent,
                 Padding = new Padding(0, 0, 0, 4)
             };
-            void Btn(string text, EventHandler h, Color? accent = null)
+            Button Btn(string text, EventHandler h, Color? accent = null)
             {
                 var b = new Button
                 {
@@ -98,10 +109,11 @@ namespace Win7Proxy
                 }
                 b.Click += h;
                 toolPanel.Controls.Add(b);
+                return b;
             }
             Btn("导入订阅", (s, e) => ImportSubscription());
             Btn("添加节点", (s, e) => AddNode());
-            Btn("测试延迟", (s, e) => TestLatency());
+            _testBtn = Btn("测试延迟", (s, e) => TestLatency());
             Btn("全选", (s, e) => _grid.SelectAll());
             Btn("删除选中", (s, e) => DeleteSelected());
             Btn("启动", (s, e) => StartProxy(), Color.FromArgb(46, 160, 67));
@@ -126,6 +138,19 @@ namespace Win7Proxy
                 _state.Save();
             };
             toolPanel.Controls.Add(_mode);
+            _spinTimer = new System.Windows.Forms.Timer { Interval = 120 };
+            _spinTimer.Tick += (s, e) =>
+            {
+                if (_grid.IsDisposed) return;
+                _spinFrame = (_spinFrame + 1) % 4;
+                string glyph = new[] { "◐", "◓", "◑", "◒" }[_spinFrame];
+                lock (_testingLock)
+                {
+                    foreach (int idx in _testingRows)
+                        if (idx >= 0 && idx < _grid.Rows.Count)
+                            _grid.Rows[idx].Cells["latency"].Value = glyph;
+                }
+            };
             layout.Controls.Add(toolPanel, 0, 1);
 
             _grid = new DataGridView
@@ -225,7 +250,7 @@ namespace Win7Proxy
 
             _tray = new NotifyIcon
             {
-                Icon = SystemIcons.Application,
+                Icon = appIcon ?? SystemIcons.Application,
                 Text = "Win7Proxy",
                 Visible = true,
                 ContextMenuStrip = new ContextMenuStrip()
@@ -415,7 +440,24 @@ namespace Win7Proxy
                 ? SelectedNodes()
                 : new List<Node>(_state.Nodes);
             if (targets.Count == 0) return;
+
+            var indices = new List<int>();
+            foreach (var n in targets)
+            {
+                int i = _state.Nodes.IndexOf(n);
+                if (i >= 0) indices.Add(i);
+            }
+            lock (_testingLock) { _testingRows.Clear(); _testingRows.UnionWith(indices); }
+            if (_testBtn != null && !_testBtn.IsDisposed) _testBtn.Enabled = false;
+            _spinFrame = 0;
+            string glyph0 = new[] { "◐", "◓", "◑", "◒" }[0];
+            foreach (int i in indices)
+                if (i >= 0 && i < _grid.Rows.Count)
+                    _grid.Rows[i].Cells["latency"].Value = glyph0;
+            if (_spinTimer != null) _spinTimer.Start();
+            SetStatus("状态：延迟测试中…");
             AppendLog("开始测试延迟（" + targets.Count + " 个节点）...");
+
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 Parallel.ForEach(targets, new ParallelOptions { MaxDegreeOfParallelism = 16 }, n =>
@@ -437,8 +479,27 @@ namespace Win7Proxy
                     }
                     catch { }
                     n.LatencyMs = ms;
+                    int idx = _state.Nodes.IndexOf(n);
+                    if (!_grid.IsDisposed && _grid.IsHandleCreated && idx >= 0 && idx < _grid.Rows.Count)
+                    {
+                        _grid.Invoke((Action)(() =>
+                        {
+                            _grid.Rows[idx].Cells["latency"].Value = ms < 0 ? "超时" : ms + " ms";
+                        }));
+                    }
+                    lock (_testingLock) _testingRows.Remove(idx);
                 });
-                RefreshGrid();
+
+                if (!_grid.IsDisposed)
+                {
+                    _grid.Invoke((Action)(() =>
+                    {
+                        if (_spinTimer != null) _spinTimer.Stop();
+                        lock (_testingLock) _testingRows.Clear();
+                        if (_testBtn != null && !_testBtn.IsDisposed) _testBtn.Enabled = true;
+                        SetStatus(_core != null ? "状态：运行中" : "状态：已停止");
+                    }));
+                }
                 AppendLog("延迟测试完成。");
             });
         }

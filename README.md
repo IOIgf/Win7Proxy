@@ -17,14 +17,8 @@ Shadowsocks/SS2022、Socks、HTTP 等主流协议。流量接管方式为 **系�
 ## 二、首次运行
 
 1. 解压 `Win7Proxy-v1.0.zip` 到任意目录（路径不要含中文/空格最佳）。
-2. 若 `core\xray.exe` 不存在，以管理员身份运行 `fetch-core.bat`
-   （右键 → 以管理员身份运行，或在 cmd 中执行），它会从 GitHub 下载
-   `Xray-win7-64.zip` 并解压出 `xray.exe`，同时下载 `geoip.dat` / `geosite.dat`。
-   - 若网络无法访问 GitHub，可手动从
-      https://github.com/XTLS/Xray-core/releases 下载 `Xray-win7-64.zip`，
-      把里面的 `xray.exe` 放到 `core\`；`geoip.dat`/`geosite.dat` 从
-      https://github.com/Loyalsoldier/v2ray-rules-dat 的
-      latest 发布下载后放入 `core\`。
+2. 内核已随包提供：`core\xray.exe` 与 `core\geoip.dat` / `core\geosite.dat` 解压即用，无需手动下载。
+   仅当要**更新**内核时，再以管理员身份运行 `fetch-core.bat`（右键 → 以管理员身份运行）拉取最新 xray-win7。
 3. 双击 `Win7Proxy.exe`。
 
 ## 三、使用

@@ -22,6 +22,17 @@ jobs:
       - name: Restore & Build (net461)
         run: dotnet build Win7Proxy/Win7Proxy.csproj -c Release -f net461
 
+      - name: Bundle xray-core (win7) + geo data via gh-proxy.org
+        run: |
+          VER="${GITHUB_REF_NAME:-1.0.0}"
+          OUT="Win7Proxy-$VER"
+          mkdir -p "$OUT/core"
+          curl -L -o /tmp/xray.zip "https://gh-proxy.org/https://github.com/XTLS/Xray-core/releases/latest/download/Xray-win7-64.zip"
+          (cd /tmp && unzip -o xray.zip -d xray >/dev/null)
+          cp "$(find /tmp/xray -name xray.exe | head -1)" "$OUT/core/xray.exe"
+          curl -L -o "$OUT/core/geoip.dat" "https://gh-proxy.org/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
+          curl -L -o "$OUT/core/geosite.dat" "https://gh-proxy.org/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+
       - name: Package release zip
         run: |
           VER="${GITHUB_REF_NAME:-1.0.0}"

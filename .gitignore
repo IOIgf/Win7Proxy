@@ -9,6 +9,9 @@ stage/
 # Release artifact (publish via GitHub Releases instead)
 Win7Proxy-v1.0.zip
 
+# Bundled xray-core kernel + geo data (downloaded, not source)
+core/
+
 # Agent / tooling state
 .omo/
 

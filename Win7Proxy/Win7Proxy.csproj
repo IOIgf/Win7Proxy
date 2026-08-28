@@ -19,4 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ProxyCore\ProxyCore.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="app.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
