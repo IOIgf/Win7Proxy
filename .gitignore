@@ -20,3 +20,6 @@ core/
 *.user
 *.suo
 Thumbs.db
+
+# 设计/规格文档（本地保留，不入库）
+docs/
