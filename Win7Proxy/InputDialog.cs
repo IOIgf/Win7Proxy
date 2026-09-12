@@ -10,6 +10,8 @@ namespace Win7Proxy
 
         public InputDialog(string title, string prompt)
         {
+            HiDpi.ApplyTo(this);   // 必须在设置 Size / 创建控件之前
+
             Text = title;
             Width = 520; Height = 160;
             StartPosition = FormStartPosition.CenterParent;
@@ -23,6 +25,8 @@ namespace Win7Proxy
 
             Controls.Add(lbl); Controls.Add(_box); Controls.Add(ok); Controls.Add(cancel);
             AcceptButton = ok; CancelButton = cancel;
+
+            HiDpi.ScaleForDpi(this);   // 必须在所有控件创建完之后
         }
     }
 }

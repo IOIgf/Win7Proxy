@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Newtonsoft.Json.Linq;
 using ProxyCore.Models;
 
 namespace ProxyCore.Parsers
@@ -21,20 +22,24 @@ namespace ProxyCore.Parsers
                 foreach (var line in decoded.Split('\n'))
                 {
                     var t = line.Trim();
-                    if (t.StartsWith("vmess://") || t.StartsWith("vless://") ||
-                        t.StartsWith("trojan://") || t.StartsWith("ss://"))
-                        return true;
+                    if (IsSupportedLink(t)) return true;
                 }
             }
             // 也可能直接是明文链接（每行一个）
             foreach (var line in raw.Split('\n'))
             {
                 var t = line.Trim();
-                if (t.StartsWith("vmess://") || t.StartsWith("vless://") ||
-                    t.StartsWith("trojan://") || t.StartsWith("ss://"))
-                    return true;
+                if (IsSupportedLink(t)) return true;
             }
             return false;
+        }
+
+        private static bool IsSupportedLink(string t)
+        {
+            return t.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase) ||
+                   t.StartsWith("vless://", StringComparison.OrdinalIgnoreCase) ||
+                   t.StartsWith("trojan://", StringComparison.OrdinalIgnoreCase) ||
+                   t.StartsWith("ss://", StringComparison.OrdinalIgnoreCase);
         }
 
         public List<Node> Parse(string raw)
@@ -47,11 +52,9 @@ namespace ProxyCore.Parsers
 
             foreach (var line in text.Split('\n'))
             {
-                var link = line.Trim();
+                var link = line.Trim().Trim('\r');
                 if (string.IsNullOrEmpty(link)) continue;
-                if (!link.StartsWith("vmess://") && !link.StartsWith("vless://") &&
-                    !link.StartsWith("trojan://") && !link.StartsWith("ss://"))
-                    continue;
+                if (!IsSupportedLink(link)) continue;
                 try
                 {
                     var node = ParseLink(link);
@@ -67,11 +70,40 @@ namespace ProxyCore.Parsers
 
         public static Node ParseLink(string link)
         {
-            if (link.StartsWith("vmess://")) return ParseVmess(link);
-            if (link.StartsWith("vless://")) return ParseVless(link);
-            if (link.StartsWith("trojan://")) return ParseTrojan(link);
-            if (link.StartsWith("ss://")) return ParseSs(link);
+            if (link == null) return null;
+            if (link.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase)) return ParseVmess(link);
+            if (link.StartsWith("vless://", StringComparison.OrdinalIgnoreCase)) return ParseVless(link);
+            if (link.StartsWith("trojan://", StringComparison.OrdinalIgnoreCase)) return ParseTrojan(link);
+            if (link.StartsWith("ss://", StringComparison.OrdinalIgnoreCase)) return ParseSs(link);
             return null;
+        }
+
+        /// <summary>
+        /// 安全读取 JSON 字段为字符串。
+        /// 早期实现写成 (string)o["tls"]，当订阅里 "tls" 是布尔值 true 时会抛
+        /// InvalidCastException，被上层 catch 吞掉后整条节点就静默消失了。
+        /// 这里统一走 ToString()，布尔/数字/字符串都能吃下。
+        /// </summary>
+        private static string Str(JObject o, params string[] keys)
+        {
+            foreach (var k in keys)
+            {
+                var t = o[k];
+                if (t == null || t.Type == JTokenType.Null) continue;
+                // 布尔值统一转成小写字符串，否则 JToken.ToString() 会给出 "True"，
+                // 后续按小写比较就匹配不上
+                if (t.Type == JTokenType.Boolean) return ((bool)t) ? "true" : "false";
+                var s = t.ToString();
+                if (!string.IsNullOrEmpty(s)) return s;
+            }
+            return "";
+        }
+
+        private static bool Bool(JObject o, params string[] keys)
+        {
+            var s = Str(o, keys);
+            if (s == "") return false;
+            return s.Equals("true", StringComparison.OrdinalIgnoreCase) || s == "1";
         }
 
         private static Node ParseVmess(string link)
@@ -79,24 +111,28 @@ namespace ProxyCore.Parsers
             // vmess://<base64(json)>
             var b64 = link.Substring("vmess://".Length);
             var json = DecodeBase64Strict(b64);
-            var o = Newtonsoft.Json.Linq.JObject.Parse(json);
+            var o = JObject.Parse(json);
             var n = new Node { Type = NodeType.Vmess, RawLink = link };
-            n.Remarks = (string)o["ps"] ?? "";
-            n.Address = (string)o["add"] ?? "";
-            n.Port = ToInt(o["port"]);
-            n.UUID = (string)o["id"] ?? "";
-            n.Security = (string)o["scy"] ?? "aes-128-gcm";
-            n.Network = (string)o["net"] ?? "tcp";
-            n.TLS = ((string)o["tls"] ?? "") == "tls";
-            n.Host = (string)o["host"] ?? "";
-            n.Path = (string)o["path"] ?? "";
-            n.SNI = (string)o["sni"] ?? n.Host;
-            if (n.Network == "ws" || n.Network == "h2")
-            {
-                // v2rayN 中 ws 的 path/host 可能在 path 字段里用逗号分隔，或 host 单独
-                if (string.IsNullOrEmpty(n.Path) && !string.IsNullOrEmpty((string)o["path"]))
-                    n.Path = (string)o["path"];
-            }
+
+            n.Remarks = Str(o, "ps", "remarks");
+            n.Address = Str(o, "add", "address");
+            n.Port = ToInt(o["port"] ?? o["server_port"]);
+            n.UUID = Str(o, "id", "uuid");
+            n.Security = Str(o, "scy", "encryption", "cipher");
+            if (string.IsNullOrEmpty(n.Security)) n.Security = "auto";
+
+            n.Network = NetUtil.NormalizeNetwork(Str(o, "net", "network", "type"));
+            n.Host = Str(o, "host", "sni");
+            n.Path = Str(o, "path", "ws-path");
+            n.SNI = Str(o, "sni", "servername", "host");
+            n.Fingerprint = Str(o, "fp", "fingerprint");
+            n.Alpn = Str(o, "alpn");
+            n.AllowInsecure = Bool(o, "allowInsecure", "allow_insecure", "skip-cert-verify");
+
+            var tls = NetUtil.NormalizeSecurity(Str(o, "tls", "security"));
+            n.TLS = tls == "tls" || tls == "reality";
+            n.Extra["security"] = tls;
+
             return n;
         }
 
@@ -108,17 +144,21 @@ namespace ProxyCore.Parsers
             n.Remarks = remarks;
             ParseAuthorityAndQuery(uri, n);
             var q = ParseQuery(uri);
-            n.TLS = (q["security"] == "tls" || q["security"] == "reality" || q["tls"] == "tls");
-            if (q.ContainsKey("security")) n.Extra["security"] = q["security"];
-            n.Flow = q.ContainsKey("flow") ? q["flow"] : "";
-            n.Network = q.ContainsKey("type") ? q["type"] : "tcp";
-            n.Path = q.ContainsKey("path") ? UriUnescape(q["path"]) : "";
-            n.Host = q.ContainsKey("host") ? UriUnescape(q["host"]) : "";
-            n.SNI = q.ContainsKey("sni") ? q["sni"] : n.Host;
-            n.Fingerprint = q.ContainsKey("fp") ? q["fp"] : "";
-            n.PublicKey = q.ContainsKey("pbk") ? q["pbk"] : "";
-            n.ShortId = q.ContainsKey("sid") ? q["sid"] : "";
-            n.AllowInsecure = q.ContainsKey("allowInsecure") && q["allowInsecure"] == "1";
+
+            var sec = NetUtil.NormalizeSecurity(Get(q, "security", "tls"));
+            n.Extra["security"] = sec;
+            n.TLS = sec == "tls" || sec == "reality";
+            n.Flow = Get(q, "flow");
+            n.Network = NetUtil.NormalizeNetwork(Get(q, "type", "network"));
+            n.Path = UriUnescape(Get(q, "path", "serviceName"));
+            n.Host = UriUnescape(Get(q, "host"));
+            n.SNI = Get(q, "sni", "servername", "host");
+            n.Fingerprint = Get(q, "fp", "fingerprint");
+            n.PublicKey = Get(q, "pbk", "publicKey");
+            n.ShortId = Get(q, "sid", "shortId");
+            n.Alpn = UriUnescape(Get(q, "alpn"));
+            n.ServiceName = UriUnescape(Get(q, "serviceName", "grpc-service-name"));
+            n.AllowInsecure = IsTrue(q, "allowInsecure", "allowInsecureTls", "skip-cert-verify");
             return n;
         }
 
@@ -130,14 +170,20 @@ namespace ProxyCore.Parsers
             n.Remarks = remarks;
             ParseAuthorityAndQuery(uri, n);
             n.Password = n.UUID; // authority 里 user 部分是密码
+            n.UUID = "";
             var q = ParseQuery(uri);
-            n.TLS = true;
-            n.Network = q.ContainsKey("type") ? q["type"] : "tcp";
-            n.Path = q.ContainsKey("path") ? UriUnescape(q["path"]) : "";
-            n.Host = q.ContainsKey("host") ? UriUnescape(q["host"]) : "";
-            n.SNI = q.ContainsKey("sni") ? q["sni"] : n.Host;
-            n.Fingerprint = q.ContainsKey("fp") ? q["fp"] : "";
-            n.AllowInsecure = q.ContainsKey("allowInsecure") && q["allowInsecure"] == "1";
+
+            var sec = NetUtil.NormalizeSecurity(Get(q, "security", "tls"));
+            n.TLS = true; // trojan 必经 TLS
+            n.Extra["security"] = sec == "none" ? "tls" : sec;
+            n.Network = NetUtil.NormalizeNetwork(Get(q, "type", "network"));
+            n.Path = UriUnescape(Get(q, "path"));
+            n.Host = UriUnescape(Get(q, "host"));
+            n.SNI = Get(q, "sni", "peer", "host");
+            n.Fingerprint = Get(q, "fp", "fingerprint");
+            n.Alpn = UriUnescape(Get(q, "alpn"));
+            n.ServiceName = UriUnescape(Get(q, "serviceName", "grpc-service-name"));
+            n.AllowInsecure = IsTrue(q, "allowInsecure", "allowInsecureTls", "skip-cert-verify");
             return n;
         }
 
@@ -153,6 +199,18 @@ namespace ProxyCore.Parsers
             int hash = body.IndexOf('#');
             if (hash >= 0) { remarks = UriUnescape(body.Substring(hash + 1)); body = body.Substring(0, hash); }
             n.Remarks = remarks;
+
+            // 可能带 ?plugin=... 查询串
+            int qm = body.IndexOf('?');
+            if (qm >= 0)
+            {
+                var qs = ParseQuery(body);
+                var plugin = Get(qs, "plugin");
+                if (!string.IsNullOrEmpty(plugin)) n.Extra["plugin"] = plugin;
+                var pluginOpts = Get(qs, "plugin-opts", "plugin_opts");
+                if (!string.IsNullOrEmpty(pluginOpts)) n.Extra["plugin_opts"] = pluginOpts;
+                body = body.Substring(0, qm);
+            }
 
             // 形式3: 整个 body 是 base64 且解码后含 '@'
             var decodedFull = TryDecodeBase64(body);
@@ -171,7 +229,7 @@ namespace ProxyCore.Parsers
             var userinfo2 = body.Substring(0, at2);
             var hp2 = body.Substring(at2 + 1);
 
-            // userinfo 可能是 base64(method:password)
+            // userinfo 可能是 base64(method:password)，也可能是 URL-safe 无填充
             var decUi = TryDecodeBase64(userinfo2);
             if (decUi != null && decUi.Contains(":"))
             {
@@ -205,8 +263,11 @@ namespace ProxyCore.Parsers
 
         private static void ParseUserHostPort(string userinfo, string hp, Node n)
         {
-            var ci = userinfo.IndexOf(':');
-            if (ci >= 0) { n.EncryptMethod = userinfo.Substring(0, ci); n.Password = userinfo.Substring(ci + 1); }
+            // SS 的 userinfo 本身可能也是 base64，先试着解一次
+            var ui = TryDecodeBase64(userinfo) ?? userinfo;
+            // password 里可能含 ':'（base64 常见），所以只按第一个 ':' 切分 method:password
+            var ci = ui.IndexOf(':');
+            if (ci >= 0) { n.EncryptMethod = ui.Substring(0, ci); n.Password = ui.Substring(ci + 1); }
             ParseHostPort(hp, n);
         }
 
@@ -215,13 +276,13 @@ namespace ProxyCore.Parsers
             // hp = host:port （host 可能含 : 若是 IPv6，但此处简化按最后 ':' 拆分）
             int colon = hp.LastIndexOf(':');
             if (colon < 0) { n.Address = hp; return; }
-            n.Address = hp.Substring(0, colon);
+            n.Address = hp.Substring(0, colon).Trim('[', ']');
             n.Port = ToInt(hp.Substring(colon + 1));
         }
 
         private static Dictionary<string, string> ParseQuery(string uri)
         {
-            var d = new Dictionary<string, string>();
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             int q = uri.IndexOf('?');
             if (q < 0) return d;
             var qs = uri.Substring(q + 1);
@@ -233,6 +294,19 @@ namespace ProxyCore.Parsers
                 else d[UriUnescape(pair.Substring(0, eq))] = UriUnescape(pair.Substring(eq + 1));
             }
             return d;
+        }
+
+        private static string Get(Dictionary<string, string> q, params string[] keys)
+        {
+            foreach (var k in keys)
+                if (q.TryGetValue(k, out var v) && !string.IsNullOrEmpty(v)) return v;
+            return "";
+        }
+
+        private static bool IsTrue(Dictionary<string, string> q, params string[] keys)
+        {
+            var v = Get(q, keys);
+            return v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string SplitLink(string link, string scheme, out string remarks)
@@ -261,11 +335,16 @@ namespace ProxyCore.Parsers
         {
             try
             {
-                var trimmed = s.Trim();
+                var trimmed = (s ?? "").Trim();
                 // 去除可能的换行
                 trimmed = trimmed.Replace("\r", "").Replace("\n", "").Replace(" ", "");
+                if (trimmed.Length == 0) return null;
                 var bytes = Convert.FromBase64String(FixPadding(trimmed));
-                return Encoding.UTF8.GetString(bytes);
+                var text = Encoding.UTF8.GetString(bytes);
+                // 避免把普通字符串误判成 base64：解码结果必须是可打印文本
+                foreach (var ch in text)
+                    if (ch != '\r' && ch != '\n' && ch != '\t' && (ch < 32 || ch == 127)) return null;
+                return text;
             }
             catch { return null; }
         }

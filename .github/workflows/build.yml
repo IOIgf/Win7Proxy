@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -19,50 +20,103 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore & Build (net461)
-        run: dotnet build Win7Proxy/Win7Proxy.csproj -c Release -f net461
+      # 先跑逻辑层单元测试，挂了就别往下打包
+      - name: Run unit tests
+        run: dotnet test ProxyCore.Tests/ProxyCore.Tests.csproj -c Release --nologo
 
-      - name: Bundle xray-core (win7) + geo data via gh-proxy.org
+      - name: Resolve version
+        id: ver
         run: |
-          VER="${GITHUB_REF_NAME:-1.0.0}"
-          OUT="Win7Proxy-$VER"
-          mkdir -p "$OUT/core"
-          curl -L -o /tmp/xray.zip "https://gh-proxy.org/https://github.com/XTLS/Xray-core/releases/latest/download/Xray-win7-64.zip"
-          (cd /tmp && unzip -o xray.zip -d xray >/dev/null)
-          cp "$(find /tmp/xray -name xray.exe | head -1)" "$OUT/core/xray.exe"
-          curl -L -o "$OUT/core/geoip.dat" "https://gh-proxy.org/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
-          curl -L -o "$OUT/core/geosite.dat" "https://gh-proxy.org/https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/}"
+          else
+            VER="1.1.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "VER=$VER" >> "$GITHUB_OUTPUT"
+          echo "版本号: $VER"
+
+      - name: Build (net461)
+        run: dotnet build Win7Proxy/Win7Proxy.csproj -c Release -f net461 --nologo
+
+      # GitHub 直连在内网/受限环境常常超时，逐个镜像试
+      - name: Bundle xray-core (win7) + geo data
+        run: |
+          set -uo pipefail
+          STAGE="stage"
+          mkdir -p "$STAGE/core" "$STAGE/Rules"
+
+          dl() { # dl <相对路径> <输出文件> <最小字节数>
+            local rel="$1" out="$2" min="${3:-100000}"
+            for m in "https://gh-proxy.org/" "https://ghproxy.com/" "https://ghproxy.net/" "https://mirror.ghproxy.com/" ""; do
+              url="${m}https://github.com/${rel}"
+              echo "  尝试: $url"
+              if curl -fsSL --max-time 300 -o "$out" "$url"; then
+                sz=$(stat -c%s "$out" 2>/dev/null || echo 0)
+                if [ "$sz" -ge "$min" ]; then echo "  OK: $out ($sz bytes)"; return 0; fi
+                echo "  尺寸异常($sz)，换下一个镜像"
+              fi
+            done
+            echo "  FAILED: $rel"
+            return 1
+          }
+
+          ok=1
+          dl "XTLS/Xray-core/releases/latest/download/Xray-win7-64.zip" /tmp/xray.zip 500000 || ok=0
+          if [ "$ok" = "1" ]; then
+            unzip -o -q /tmp/xray.zip -d /tmp/xray
+            XRAY_BIN="$(find /tmp/xray -iname xray.exe | head -1)"
+            if [ -n "$XRAY_BIN" ]; then cp "$XRAY_BIN" "$STAGE/core/xray.exe"; else ok=0; fi
+          fi
+
+          dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" "$STAGE/core/geoip.dat" 100000 || true
+          dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" "$STAGE/core/geosite.dat" 100000 || true
+
+          if [ ! -f "$STAGE/core/xray.exe" ]; then
+            echo "::warning::未拿到 xray 内核，产出的 zip 不含内核，用户需在 Windows 上运行 fetch-core.bat 补齐"
+          fi
 
       - name: Package release zip
         run: |
-          VER="${GITHUB_REF_NAME:-1.0.0}"
-          OUT="Win7Proxy-$VER"
-          mkdir -p "$OUT/Rules"
-          cp Win7Proxy/bin/Release/net461/Win7Proxy.exe "$OUT/"
-          cp ProxyCore/bin/Release/net461/ProxyCore.dll "$OUT/"
-          for d in Microsoft.Win32.Registry Newtonsoft.Json System.Security.AccessControl System.Security.Principal.Windows YamlDotNet; do
-            if [ -f "Win7Proxy/bin/Release/net461/$d.dll" ]; then
-              cp "Win7Proxy/bin/Release/net461/$d.dll" "$OUT/"
-            elif [ -f "ProxyCore/bin/Release/net461/$d.dll" ]; then
-              cp "ProxyCore/bin/Release/net461/$d.dll" "$OUT/"
-            fi
-          done
-          cp Win7Proxy/bin/Release/net461/Win7Proxy.exe.config "$OUT/"
-          cp README.md fetch-core.bat "$OUT/"
-          cp Rules/pac-rules.txt "$OUT/Rules/"
-          python3 -c "import zipfile,os; z=zipfile.ZipFile('Win7Proxy-v1.0.zip','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'$OUT')) for r,_,fs in os.walk('$OUT') for f in fs]; z.close()"
-          echo "打包完成: $(ls -la Win7Proxy-v1.0.zip | awk '{print $5}') bytes"
+          VER="${{ steps.ver.outputs.VER }}"
+          STAGE="stage"
+          BIN="Win7Proxy/bin/Release/net461"
+          mkdir -p "$STAGE/Rules"
+
+          # 主程序 + 全部依赖（不再手写 DLL 清单，避免漏拷）
+          find "$BIN" -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dll' -o -name '*.config' \) -exec cp {} "$STAGE/" \;
+          [ -f "Win7Proxy/app.ico" ] && cp Win7Proxy/app.ico "$STAGE/app.ico"
+
+          cp README.md fetch-core.bat "$STAGE/"
+          cp Rules/pac-rules.txt "$STAGE/Rules/"
+
+          python3 - "$STAGE" "Win7Proxy-$VER.zip" <<'PY'
+          import sys, zipfile, os
+          stage, out = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for root, _, files in os.walk(stage):
+                  for f in files:
+                      p = os.path.join(root, f)
+                      z.write(p, os.path.relpath(p, stage))
+          print("打包内容：")
+          for root, _, files in os.walk(stage):
+              for f in sorted(files):
+                  p = os.path.join(root, f)
+                  print("  ", os.path.relpath(p, stage), os.path.getsize(p))
+          PY
+          echo "产物: Win7Proxy-$VER.zip"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: Win7Proxy
-          path: Win7Proxy-v1.0.zip
+          path: Win7Proxy-*.zip
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: Win7Proxy-v1.0.zip
+          name: Win7Proxy ${{ steps.ver.outputs.VER }}
+          files: Win7Proxy-*.zip
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

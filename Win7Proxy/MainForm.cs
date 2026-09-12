@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -15,6 +16,8 @@ namespace Win7Proxy
 {
     public class MainForm : Form
     {
+        private const string AppVersion = "1.1.1";
+
         private readonly AppState _state;
         private CoreProcess _core;
         private readonly DataGridView _grid;
@@ -32,8 +35,16 @@ namespace Win7Proxy
         private System.Windows.Forms.Timer _spinTimer;
         private int _spinFrame;
 
+        private ToolStripMenuItem _miAutoStart;
+        private ToolStripMenuItem _miAutoConnect;
+        private ToolStripMenuItem _miDedupe;
+        private string _coreVersion = "";
+        private Node _currentNode;
+
         public MainForm()
         {
+            HiDpi.ApplyTo(this);   // 必须在设置 Size / 创建控件之前
+
             _state = AppState.Load();
 
             string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
@@ -41,9 +52,9 @@ namespace Win7Proxy
             try { if (File.Exists(iconPath)) appIcon = new Icon(iconPath); }
             catch { appIcon = null; }
 
-            Text = "Win7Proxy";
+            Text = "Win7Proxy " + AppVersion + "  ·  Windows 7 代理客户端";
             Icon = appIcon ?? SystemIcons.Application;
-            Width = 820; Height = 560;
+            Width = 860; Height = 600;
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9F);
             BackColor = Color.FromArgb(244, 246, 249);
@@ -52,28 +63,15 @@ namespace Win7Proxy
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 6,
+                RowCount = 5,
                 Padding = new Padding(10, 8, 10, 8),
                 BackColor = Color.FromArgb(244, 246, 249)
             };
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 48F));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 52F));
-            Controls.Add(layout);
-
-            var title = new Label
-            {
-                Text = "Win7Proxy  ·  Windows 7 代理客户端",
-                Font = new Font("Segoe UI", 13F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(45, 125, 218),
-                AutoSize = true,
-                Dock = DockStyle.Fill,
-                Padding = new Padding(0, 0, 0, 6)
-            };
-            layout.Controls.Add(title, 0, 0);
 
             var toolPanel = new FlowLayoutPanel
             {
@@ -81,7 +79,7 @@ namespace Win7Proxy
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
+                WrapContents = true,
                 BackColor = Color.Transparent,
                 Padding = new Padding(0, 0, 0, 4)
             };
@@ -93,7 +91,7 @@ namespace Win7Proxy
                     AutoSize = true,
                     FlatStyle = FlatStyle.Flat,
                     Font = new Font("Segoe UI", 9F),
-                    Margin = new Padding(2, 0, 2, 0),
+                    Margin = new Padding(2, 2, 2, 2),
                     Padding = new Padding(12, 5, 12, 5)
                 };
                 b.FlatAppearance.BorderSize = 0;
@@ -113,10 +111,11 @@ namespace Win7Proxy
             }
             Btn("导入订阅", (s, e) => ImportSubscription());
             Btn("添加节点", (s, e) => AddNode());
+            Btn("更新订阅", (s, e) => UpdateAllSubscriptions());
             _testBtn = Btn("测试延迟", (s, e) => TestLatency());
             Btn("全选", (s, e) => _grid.SelectAll());
             Btn("删除选中", (s, e) => DeleteSelected());
-            Btn("启动", (s, e) => StartProxy(), Color.FromArgb(46, 160, 67));
+            Btn("启动", (s, e) => StartProxy(false), Color.FromArgb(46, 160, 67));
             Btn("停止", (s, e) => StopProxy(), Color.FromArgb(208, 64, 64));
             Btn("更新内核", (s, e) => UpdateCore());
 
@@ -126,7 +125,7 @@ namespace Win7Proxy
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F),
                 ForeColor = Color.FromArgb(80, 84, 92),
-                Margin = new Padding(14, 7, 2, 0)
+                Margin = new Padding(14, 9, 2, 0)
             };
             toolPanel.Controls.Add(modeLabel);
             _mode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9F) };
@@ -136,6 +135,17 @@ namespace Win7Proxy
             {
                 _state.Mode = (ProxyMode)_mode.SelectedIndex;
                 _state.Save();
+                // 旧版本：改了模式只存盘，正在跑的内核不会重建配置，
+                // 结果"切到规则模式"其实还在全局。现在运行中切换会立刻重启内核。
+                if (_core != null && _currentNode != null)
+                {
+                    AppendLog("模式已切换为「" + _mode.Text + "」，正在重启内核...");
+                    StartProxy(true);
+                }
+                else
+                {
+                    UpdateStatus();
+                }
             };
             toolPanel.Controls.Add(_mode);
             _spinTimer = new System.Windows.Forms.Timer { Interval = 120 };
@@ -151,7 +161,7 @@ namespace Win7Proxy
                             _grid.Rows[idx].Cells["latency"].Value = glyph;
                 }
             };
-            layout.Controls.Add(toolPanel, 0, 1);
+            layout.Controls.Add(toolPanel, 0, 0);
 
             _grid = new DataGridView
             {
@@ -193,11 +203,11 @@ namespace Win7Proxy
             _grid.Columns.Add("addr", "地址");
             _grid.Columns.Add("latency", "延迟");
             _grid.Columns.Add("source", "来源");
-            _grid.Columns["remarks"].FillWeight = 38;
-            _grid.Columns["type"].FillWeight = 12;
-            _grid.Columns["addr"].FillWeight = 32;
+            _grid.Columns["remarks"].FillWeight = 36;
+            _grid.Columns["type"].FillWeight = 11;
+            _grid.Columns["addr"].FillWeight = 30;
             _grid.Columns["latency"].FillWeight = 10;
-            _grid.Columns["source"].FillWeight = 18;
+            _grid.Columns["source"].FillWeight = 13;
             foreach (DataGridViewColumn c in _grid.Columns)
                 c.SortMode = DataGridViewColumnSortMode.Programmatic;
             _grid.SelectionChanged += (s, e) =>
@@ -211,10 +221,10 @@ namespace Win7Proxy
                 if (e.RowIndex >= 0 && e.RowIndex < _state.Nodes.Count)
                 {
                     _grid.CurrentCell = _grid.Rows[e.RowIndex].Cells[0];
-                    StartProxy();
+                    StartProxy(false);
                 }
             };
-            layout.Controls.Add(_grid, 0, 3);
+            layout.Controls.Add(_grid, 0, 2);
 
             _nodeLabel = new Label
             {
@@ -225,7 +235,7 @@ namespace Win7Proxy
                 Text = "当前节点：未选择",
                 Padding = new Padding(2, 4, 2, 2)
             };
-            layout.Controls.Add(_nodeLabel, 0, 2);
+            layout.Controls.Add(_nodeLabel, 0, 1);
 
             _status = new Label
             {
@@ -236,7 +246,7 @@ namespace Win7Proxy
                 Text = "状态：已停止",
                 Padding = new Padding(2, 2, 2, 6)
             };
-            layout.Controls.Add(_status, 0, 4);
+            layout.Controls.Add(_status, 0, 3);
 
             _log = new TextBox
             {
@@ -246,7 +256,12 @@ namespace Win7Proxy
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Consolas", 9)
             };
-            layout.Controls.Add(_log, 0, 5);
+            layout.Controls.Add(_log, 0, 4);
+
+            Controls.Add(layout);
+            var menu = BuildMenu();
+            Controls.Add(menu);
+            MainMenuStrip = menu;
 
             _tray = new NotifyIcon
             {
@@ -256,7 +271,7 @@ namespace Win7Proxy
                 ContextMenuStrip = new ContextMenuStrip()
             };
             _tray.ContextMenuStrip.Items.Add("显示主窗口", null, (s, e) => ShowForm());
-            _tray.ContextMenuStrip.Items.Add("启动", null, (s, e) => StartProxy());
+            _tray.ContextMenuStrip.Items.Add("启动", null, (s, e) => StartProxy(false));
             _tray.ContextMenuStrip.Items.Add("停止", null, (s, e) => StopProxy());
             _tray.ContextMenuStrip.Items.Add(new ToolStripSeparator());
             _tray.ContextMenuStrip.Items.Add("退出", null, (s, e) => RealExit());
@@ -280,7 +295,115 @@ namespace Win7Proxy
             if (_state.SelectedIndex >= 0 && _state.SelectedIndex < _state.Nodes.Count)
                 try { _grid.Rows[_state.SelectedIndex].Selected = true; } catch { }
             UpdateNodeLabel();
+
+            HiDpi.ScaleForDpi(this);   // 必须在所有控件创建完之后
+
+            // 下面这些要等窗体句柄创建完才能安全 Invoke，所以放到 Load 里做
+            Load += (s, e) => OnFirstLoad();
         }
+
+        private void OnFirstLoad()
+        {
+            // 上次异常退出可能留下一个没人管的 xray，先按 PID 文件回收掉
+            var killed = CoreProcess.KillOrphan(PidFilePath());
+            if (killed > 0) AppendLog("已清理上次残留的内核进程。");
+
+            ProbeCoreVersionAsync();
+
+            if (_state.AutoConnect && _state.Mode != ProxyMode.Direct &&
+                _state.SelectedIndex >= 0 && _state.SelectedIndex < _state.Nodes.Count)
+            {
+                AppendLog("自动连接已开启，正在用上次节点启动...");
+                StartProxy(true);
+            }
+            else
+            {
+                UpdateStatus();
+            }
+        }
+
+        // ---------- 菜单 ----------
+
+        private MenuStrip BuildMenu()
+        {
+            var menu = new MenuStrip { BackColor = Color.FromArgb(244, 246, 249) };
+
+            var mSub = new ToolStripMenuItem("订阅(&S)");
+            mSub.DropDownItems.Add("导入订阅(&I)...", null, (s, e) => ImportSubscription());
+            mSub.DropDownItems.Add("从剪贴板导入(&C)", null, (s, e) => ImportFromClipboard());
+            mSub.DropDownItems.Add(new ToolStripSeparator());
+            mSub.DropDownItems.Add("更新全部订阅(&U)", null, (s, e) => UpdateAllSubscriptions());
+            mSub.DropDownItems.Add("订阅管理(&M)...", null, (s, e) => OpenSubscriptionManager());
+
+            var mNode = new ToolStripMenuItem("节点(&N)");
+            mNode.DropDownItems.Add("添加节点(&A)...", null, (s, e) => AddNode());
+            mNode.DropDownItems.Add("复制原始链接(&L)", null, (s, e) => CopyRawLinks());
+            mNode.DropDownItems.Add(new ToolStripSeparator());
+            mNode.DropDownItems.Add("去除重复节点(&D)", null, (s, e) => DedupeNodes());
+            mNode.DropDownItems.Add("清空延迟结果(&R)", null, (s, e) => ClearLatency());
+
+            var mOpt = new ToolStripMenuItem("设置(&O)");
+            _miAutoStart = new ToolStripMenuItem("开机自动启动") { CheckOnClick = true, Checked = _state.AutoStart };
+            _miAutoStart.CheckedChanged += (s, e) =>
+            {
+                _state.AutoStart = _miAutoStart.Checked;
+                var exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Win7Proxy.exe");
+                SystemProxy.SetAutoStart(_miAutoStart.Checked, exe);
+                _state.Save();
+                AppendLog("开机自启：" + (_miAutoStart.Checked ? "已开启" : "已关闭"));
+            };
+            _miAutoConnect = new ToolStripMenuItem("启动时自动连接上次节点") { CheckOnClick = true, Checked = _state.AutoConnect };
+            _miAutoConnect.CheckedChanged += (s, e) =>
+            {
+                _state.AutoConnect = _miAutoConnect.Checked;
+                _state.Save();
+            };
+            _miDedupe = new ToolStripMenuItem("导入订阅时自动去重") { CheckOnClick = true, Checked = _state.DedupeOnImport };
+            _miDedupe.CheckedChanged += (s, e) =>
+            {
+                _state.DedupeOnImport = _miDedupe.Checked;
+                _state.Save();
+            };
+            mOpt.DropDownItems.Add(_miAutoStart);
+            mOpt.DropDownItems.Add(_miAutoConnect);
+            mOpt.DropDownItems.Add(_miDedupe);
+
+            var mHelp = new ToolStripMenuItem("帮助(&H)");
+            mHelp.DropDownItems.Add("打开程序目录", null, (s, e) => OpenFolder(AppDomain.CurrentDomain.BaseDirectory));
+            mHelp.DropDownItems.Add("打开配置目录", null, (s, e) => OpenFolder(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Win7Proxy")));
+            mHelp.DropDownItems.Add(new ToolStripSeparator());
+            mHelp.DropDownItems.Add("清空日志", null, (s, e) => { _log.Clear(); });
+            mHelp.DropDownItems.Add("关于", null, (s, e) => ShowAbout());
+
+            menu.Items.Add(mSub);
+            menu.Items.Add(mNode);
+            menu.Items.Add(mOpt);
+            menu.Items.Add(mHelp);
+            return menu;
+        }
+
+        private void ShowAbout()
+        {
+            MessageBox.Show(
+                "Win7Proxy " + AppVersion + "\n\n" +
+                "Windows 7 上的代理客户端，基于 xray-core。\n" +
+                "内核：" + (string.IsNullOrEmpty(_coreVersion) ? "未检测到" : _coreVersion) +
+                "\n\n流量接管：系统代理指向本机 Xray，分流由 geoip/geosite 规则完成。",
+                "关于 Win7Proxy", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private static void OpenFolder(string path)
+        {
+            try
+            {
+                if (!Directory.Exists(path)) Directory.CreateDirectory(path);
+                Process.Start(new ProcessStartInfo("explorer.exe", path));
+            }
+            catch { }
+        }
+
+        // ---------- 基础 UI ----------
 
         private Node SelectedNode()
         {
@@ -368,7 +491,7 @@ namespace Win7Proxy
 
         private void AppendLog(string line)
         {
-            if (_log.IsDisposed) return;
+            if (_log == null || _log.IsDisposed) return;
             if (_log.InvokeRequired) { _log.BeginInvoke((Action<string>)AppendLog, line); return; }
             _log.AppendText(line + Environment.NewLine);
             if (_log.Lines.Length > 2000)
@@ -377,9 +500,22 @@ namespace Win7Proxy
 
         private void SetStatus(string text)
         {
+            if (_status == null || _status.IsDisposed) return;
             if (_status.InvokeRequired) { _status.BeginInvoke((Action<string>)SetStatus, text); return; }
             _status.Text = text;
         }
+
+        private void UpdateStatus()
+        {
+            var modeText = _state.Mode == ProxyMode.Global ? "全局" : (_state.Mode == ProxyMode.Rule ? "规则" : "直连");
+            if (_core != null && _currentNode != null)
+                SetStatus("状态：运行中（" + modeText + "） — " + _currentNode.Remarks);
+            else
+                SetStatus("状态：已停止（" + modeText + "）" +
+                          (string.IsNullOrEmpty(_coreVersion) ? "" : "  ·  内核 " + _coreVersion));
+        }
+
+        // ---------- 订阅与节点 ----------
 
         private void ImportSubscription()
         {
@@ -389,17 +525,158 @@ namespace Win7Proxy
                 try
                 {
                     var count = dlg.Fetch();
-                    _state.Subscriptions.Add(dlg.Subscription);
-                    _state.Nodes.AddRange(dlg.Subscription.Nodes);
+                    var sub = dlg.Subscription;
+
+                    // 同一个 URL 重复导入时替换旧订阅，而不是把节点无脑追加
+                    var existing = FindByUrl(sub.Url);
+                    if (existing != null)
+                    {
+                        sub.Id = existing.Id;
+                        SubscriptionManagerForm.RemoveNodesFrom(_state, existing.Id);
+                        _state.Subscriptions.Remove(existing);
+                    }
+
+                    _state.Subscriptions.Add(sub);
+                    SubscriptionManagerForm.ApplyNodesTo(_state, sub);
+                    if (_state.DedupeOnImport) SubscriptionManagerForm.Dedupe(_state);
                     _state.Save();
                     RefreshGrid();
-                    MessageBox.Show("成功导入 " + count + " 个节点。", "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("成功导入 " + count + " 个节点" +
+                                    (existing != null ? "（已替换同名旧订阅）" : "") + "。",
+                        "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    AppendLog("导入订阅「" + sub.Name + "」，" + count + " 个节点。");
                 }
                 catch (ProxyCoreException ex)
                 {
                     MessageBox.Show("订阅拉取失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
+        }
+
+        private Subscription FindByUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return null;
+            foreach (var s in _state.Subscriptions)
+                if (string.Equals(s.Url, url, StringComparison.OrdinalIgnoreCase)) return s;
+            return null;
+        }
+
+        private void UpdateAllSubscriptions()
+        {
+            if (_state.Subscriptions.Count == 0)
+            {
+                MessageBox.Show("还没有导入任何订阅。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            _testBtn.Enabled = false;
+            AppendLog("开始更新 " + _state.Subscriptions.Count + " 个订阅...");
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                var ok = 0;
+                var fail = new StringBuilder();
+                var total = 0;
+                foreach (var sub in new List<Subscription>(_state.Subscriptions))
+                {
+                    try
+                    {
+                        SubscriptionFetcher.Fetch(sub);
+                        ok++; total += sub.Nodes.Count;
+                    }
+                    catch (Exception ex)
+                    {
+                        fail.AppendLine("  " + sub.Name + "：" + ex.Message);
+                    }
+                }
+
+                BeginInvoke((Action)(() =>
+                {
+                    // 统一重建节点列表：订阅带来的节点全部替换，手动添加的节点保留
+                    RebuildNodesFromSubscriptions();
+                    if (_state.DedupeOnImport) SubscriptionManagerForm.Dedupe(_state);
+                    _state.Save();
+                    RefreshGrid();
+                    _testBtn.Enabled = true;
+                    AppendLog("订阅更新完成：成功 " + ok + " 个，共 " + total + " 个节点。");
+                    if (fail.Length > 0) AppendLog("失败的订阅：\n" + fail);
+                    MessageBox.Show("更新完成：成功 " + ok + " 个订阅，共 " + total + " 个节点。" +
+                                    (fail.Length > 0 ? "\n\n部分订阅失败，详见日志。" : ""),
+                        "更新订阅", MessageBoxButtons.OK,
+                        fail.Length > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                }));
+            });
+        }
+
+        /// <summary>按当前订阅列表重建节点：订阅节点全部替换，手动添加的节点保留。</summary>
+        private void RebuildNodesFromSubscriptions()
+        {
+            var manual = new List<Node>();
+            foreach (var n in _state.Nodes)
+                if (string.IsNullOrEmpty(n.SubscriptionId)) manual.Add(n);
+
+            _state.Nodes.Clear();
+            _state.Nodes.AddRange(manual);
+            foreach (var sub in _state.Subscriptions)
+                SubscriptionManagerForm.ApplyNodesTo(_state, sub);
+        }
+
+        private void OpenSubscriptionManager()
+        {
+            using (var dlg = new SubscriptionManagerForm(_state, () => RefreshGrid()))
+                dlg.ShowDialog(this);
+        }
+
+        private void ImportFromClipboard()
+        {
+            string text = "";
+            try { text = Clipboard.GetText(); } catch { }
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                MessageBox.Show("剪贴板是空的，或无法读取。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            ImportRawText(text);
+        }
+
+        private void ImportRawText(string raw)
+        {
+            raw = raw.Trim();
+            var added = 0;
+
+            // 单条链接
+            var single = V2rayNParser.ParseLink(raw);
+            if (single != null)
+            {
+                single.SourceName = "手动";
+                _state.Nodes.Add(single);
+                added = 1;
+            }
+            else
+            {
+                var parser = SubscriptionParserFactory.Detect(raw);
+                if (parser == null)
+                {
+                    MessageBox.Show("剪贴板内容既不是可识别的单条链接，也不是 v2rayN / Clash / SIP008 订阅。",
+                        "无法识别", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                var sub = new Subscription { Name = "剪贴板导入", Url = "" };
+                var nodes = parser.Parse(raw);
+                foreach (var n in nodes) { n.SourceName = sub.Name; n.SubscriptionId = ""; }
+                foreach (var n in nodes) _state.Nodes.Add(n);
+                added = nodes.Count;
+            }
+
+            if (_state.DedupeOnImport)
+            {
+                var removed = SubscriptionManagerForm.Dedupe(_state);
+                added -= removed;
+            }
+            _state.Save();
+            RefreshGrid();
+            AppendLog("从剪贴板导入 " + added + " 个节点。");
+            if (added > 0)
+                MessageBox.Show("已导入 " + added + " 个节点。", "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void AddNode()
@@ -412,7 +689,9 @@ namespace Win7Proxy
                     var node = V2rayNParser.ParseLink(dlg.Value.Trim());
                     if (node == null) { MessageBox.Show("无法解析该链接。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
                     node.SourceName = "手动";
+                    node.SubscriptionId = "";
                     _state.Nodes.Add(node);
+                    if (_state.DedupeOnImport) SubscriptionManagerForm.Dedupe(_state);
                     _state.Save();
                     RefreshGrid();
                 }
@@ -421,6 +700,45 @@ namespace Win7Proxy
                     MessageBox.Show("解析失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
+        }
+
+        private void CopyRawLinks()
+        {
+            var nodes = SelectedNodes();
+            if (nodes.Count == 0) { MessageBox.Show("请先选中要复制的节点。", "提示"); return; }
+
+            var sb = new StringBuilder();
+            var missing = 0;
+            foreach (var n in nodes)
+            {
+                if (string.IsNullOrEmpty(n.RawLink)) { missing++; continue; }
+                if (sb.Length > 0) sb.AppendLine();
+                sb.Append(n.RawLink);
+            }
+            if (sb.Length == 0)
+            {
+                MessageBox.Show("选中的节点没有保存原始链接（订阅更新后重新解析的节点才会有）。",
+                    "无法复制", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try { Clipboard.SetText(sb.ToString()); } catch { }
+            AppendLog("已复制 " + (nodes.Count - missing) + " 条链接到剪贴板。");
+        }
+
+        private void DedupeNodes()
+        {
+            var removed = SubscriptionManagerForm.Dedupe(_state);
+            _state.Save();
+            RefreshGrid();
+            MessageBox.Show(removed > 0 ? "已去除 " + removed + " 个重复节点。" : "没有发现重复节点。",
+                "去重", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void ClearLatency()
+        {
+            foreach (var n in _state.Nodes) n.LatencyMs = -1;
+            _state.Save();
+            RefreshGrid();
         }
 
         private List<Node> SelectedNodes()
@@ -497,9 +815,10 @@ namespace Win7Proxy
                         if (_spinTimer != null) _spinTimer.Stop();
                         lock (_testingLock) _testingRows.Clear();
                         if (_testBtn != null && !_testBtn.IsDisposed) _testBtn.Enabled = true;
-                        SetStatus(_core != null ? "状态：运行中" : "状态：已停止");
+                        UpdateStatus();
                     }));
                 }
+                _state.Save();
                 AppendLog("延迟测试完成。");
             });
         }
@@ -521,61 +840,151 @@ namespace Win7Proxy
             AppendLog("已删除 " + nodes.Count + " 个节点。");
         }
 
-        private void StartProxy()
+        // ---------- 内核控制 ----------
+
+        private string PidFilePath()
+        {
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir, "xray.pid");
+        }
+
+        private void StartProxy(bool quiet)
         {
             var node = SelectedNode();
-            if (node == null) { MessageBox.Show("请先在列表中选择一个节点。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (node == null)
+            {
+                if (!quiet) MessageBox.Show("请先在列表中选择一个节点。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // 直连模式：只清系统代理并停内核，不启动 xray。
+            // 旧版本这里照样起内核、随后又把系统代理清掉，结果是内核空转。
+            if (_state.Mode == ProxyMode.Direct)
+            {
+                StopCoreOnly();
+                SystemProxy.SetProxy(ProxyMode.Direct);
+                _currentNode = null;
+                UpdateStatus();
+                AppendLog("已切换到直连模式，未启动内核。");
+                if (!quiet) MessageBox.Show("直连模式：已关闭系统代理，不会启动内核。", "直连模式",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
+            var xrayPath = Path.Combine(coreDir, CoreConstants.XrayExe);
+            if (!File.Exists(xrayPath))
+            {
+                if (quiet) { AppendLog("未找到 core/xray.exe，跳过自动启动。"); return; }
+                MessageBox.Show("未找到 core/xray.exe。请运行 fetch-core.bat 下载 xray-win7 内核后重试。",
+                    "缺少内核", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // 端口被别的程序占着时，提前告知，避免"看起来启动了其实没连上"
+            if (_core == null && CoreProcess.IsPortListening(CoreConstants.SocksPort, 300))
+            {
+                AppendLog("警告：" + CoreConstants.SocksPort + " 端口已被其他程序占用，内核可能无法启动。");
+            }
+
             try
             {
-                var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
                 Directory.CreateDirectory(coreDir);
                 var cfgPath = Path.Combine(coreDir, CoreConstants.ConfigFile);
                 File.WriteAllText(cfgPath, XrayConfigBuilder.Build(node, _state.Mode).ToJson());
 
-                var xrayPath = Path.Combine(coreDir, CoreConstants.XrayExe);
-                if (!File.Exists(xrayPath))
-                {
-                    MessageBox.Show("未找到 core/xray.exe。请运行 fetch-core.bat 下载 xray-win7 内核后重试。",
-                        "缺少内核", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
+                // 已知的内核不兼容（比如 h2 传输在新版 xray 里已被移除）提前说清楚，
+                // 否则用户只会看到"内核启动失败"四个字，无从下手
+                foreach (var w in NodeCompat.Warnings(node))
+                    AppendLog("兼容性提示：" + w);
 
-                if (_core != null) { try { _core.Stop(); _core.Dispose(); } catch { } _core = null; }
+                StopCoreOnly();
+
                 _core = new CoreProcess();
+                var core = _core;
                 _core.LogReceived += s => AppendLog(s);
-                _core.Exited += () => SetStatus("状态：已停止（内核退出）");
-                _core.Start(xrayPath, cfgPath, coreDir);
+                _core.Exited += () => OnCoreExited(core);
+                _core.Start(xrayPath, cfgPath, coreDir, PidFilePath());
 
                 bool up = false;
-                for (int i = 0; i < 20; i++)
+                for (int i = 0; i < 25; i++)
                 {
                     if (CoreProcess.IsPortListening(CoreConstants.SocksPort, 300)) { up = true; break; }
                     Thread.Sleep(200);
                 }
-                SystemProxy.SetProxy(_state.Mode, null);
-                SetStatus("状态：运行中 — " + node.Remarks);
-                if (!up) MessageBox.Show("已发送启动命令，但本机端口尚未监听，请查看下方日志。",
-                    "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+                SystemProxy.SetProxy(_state.Mode);
+                _currentNode = node;
+                UpdateStatus();
+
+                if (up)
+                {
+                    AppendLog("内核已启动：" + node.Remarks + "（" + _mode.Text + "模式）");
+                }
+                else
+                {
+                    AppendLog("内核已发出启动命令，但 " + CoreConstants.SocksPort + " 端口未在 5 秒内监听，请查看日志。");
+                    if (!quiet)
+                        MessageBox.Show("已发送启动命令，但本机端口尚未监听，请查看下方日志。",
+                            "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
             catch (ProxyCoreException ex)
             {
-                MessageBox.Show(ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (!quiet) MessageBox.Show(ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppendLog("启动失败：" + ex.Message);
+                StopCoreOnly();
+                SystemProxy.Clear();
+                _currentNode = null;
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (!quiet) MessageBox.Show(ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppendLog("启动失败：" + ex.Message);
+                StopCoreOnly();
+                SystemProxy.Clear();
+                _currentNode = null;
             }
+        }
+
+        private void OnCoreExited(CoreProcess core)
+        {
+            // 主动停止时 _core 已被换掉/置空，这时不该当成"内核崩了"
+            if (!ReferenceEquals(core, _core)) return;
+
+            // 内核自己挂了（配置错误、端口冲突等）时，必须把系统代理撤掉，
+            // 否则用户会陷入"代理开着但没人干活"的断网状态。
+            SystemProxy.Clear();
+            _currentNode = null;
+            UpdateStatus();
+            AppendLog("内核进程已退出，已恢复系统代理为「不使用代理」。");
+        }
+
+        private void StopCoreOnly()
+        {
+            if (_core == null) return;
+            try { _core.Stop(); _core.Dispose(); } catch { }
+            _core = null;
         }
 
         private void StopProxy()
         {
-            if (_core != null)
-            {
-                try { _core.Stop(); _core.Dispose(); } catch { }
-                _core = null;
-            }
+            StopCoreOnly();
             SystemProxy.Clear();
-            SetStatus("状态：已停止");
+            _currentNode = null;
+            UpdateStatus();
+            AppendLog("已停止，系统代理已恢复。");
+        }
+
+        private void ProbeCoreVersionAsync()
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir, CoreConstants.XrayExe);
+                var v = CoreProcess.GetCoreVersion(path);
+                if (string.IsNullOrEmpty(v)) return;
+                _coreVersion = v;
+                BeginInvoke((Action)(() => { UpdateStatus(); AppendLog("检测到内核：" + v); }));
+            });
         }
 
         private void UpdateCore()
@@ -585,13 +994,12 @@ namespace Win7Proxy
                 var bat = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fetch-core.bat");
                 Process.Start(new ProcessStartInfo(bat)
                 {
-                    UseShellExecute = true,
-                    Verb = "runas"
+                    UseShellExecute = true
                 });
             }
             catch (Exception ex)
             {
-                MessageBox.Show("无法启动 fetch-core.bat，请手动以管理员或普通用户运行它。\n" + ex.Message,
+                MessageBox.Show("无法启动 fetch-core.bat，请手动运行它。\n" + ex.Message,
                     "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }

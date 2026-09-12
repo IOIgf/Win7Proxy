@@ -6,24 +6,27 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 DOTNET="$ROOT/.dotnet/dotnet"
 STAGE="$ROOT/stage"
-OUT="$ROOT/Win7Proxy-v1.0.zip"
 VER="${1:-}"
+OUT="$ROOT/Win7Proxy-${VER:-v1.1.0}.zip"
 
-echo "==> 1) 构建 Win7Proxy (net48)"
-"$DOTNET" build "$ROOT/Win7Proxy/Win7Proxy.csproj" -c Release -f net48
+echo "==> 1) 构建 Win7Proxy (net461)"
+"$DOTNET" build "$ROOT/Win7Proxy/Win7Proxy.csproj" -c Release -f net461 || exit 1
 
-BIN="$ROOT/Win7Proxy/bin/Release/net48"
+BIN="$ROOT/Win7Proxy/bin/Release/net461"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/core" "$STAGE/Rules"
 
 echo "==> 2) 复制主程序与依赖"
-for f in Win7Proxy.exe ProxyCore.dll Newtonsoft.Json.dll YamlDotNet.dll; do
-    if [ -f "$BIN/$f" ]; then cp "$BIN/$f" "$STAGE/"; else echo "警告: 缺少 $f"; fi
+# 直接把输出目录里的 exe/dll/config 全拷过去，不再手写清单（手写清单容易漏拷依赖）
+find "$BIN" -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dll' -o -name '*.config' \) -exec cp {} "$STAGE/" \;
+[ -f "$ROOT/Win7Proxy/app.ico" ] && cp "$ROOT/Win7Proxy/app.ico" "$STAGE/app.ico"
+for f in Win7Proxy.exe ProxyCore.dll; do
+    [ -f "$STAGE/$f" ] || echo "警告: 缺少 $f"
 done
 
 echo "==> 3) (尽力) 下载 xray-win7 内核与 geo 数据"
 # 网速受限环境可能失败；失败时仍产出可用包，用户在 Windows 上首次运行
-# fetch-core.ps1 即可补齐内核与 geo 数据。
+# fetch-core.bat 即可补齐内核与 geo 数据。
 if [ -z "$VER" ]; then
     for i in 1 2 3; do
         VER="$(curl -s --max-time 30 "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
@@ -44,10 +47,10 @@ zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])
 PY
         fi
         if [ ! -f "$STAGE/core/xray.exe" ]; then
-            echo "警告: 解压后未找到 xray.exe，打包将不含内核，请在 Windows 上运行 fetch-core.ps1"
+            echo "警告: 解压后未找到 xray.exe，打包将不含内核，请在 Windows 上运行 fetch-core.bat"
         fi
     else
-        echo "警告: 下载 xray 内核失败，打包将不含内核，请在 Windows 上运行 fetch-core.ps1"
+        echo "警告: 下载 xray 内核失败，打包将不含内核，请在 Windows 上运行 fetch-core.bat"
     fi
     # geo 数据（尺寸过小则视为失败并移除）
     for pair in "geoip.dat|https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" \
@@ -56,7 +59,7 @@ PY
         if curl -L --max-time 180 -o "$STAGE/core/$name" "$url"; then
             SZ="$(stat -c%s "$STAGE/core/$name" 2>/dev/null || echo 0)"
             if [ "${SZ:-0}" -lt 100000 ]; then
-                echo "警告: $name 下载异常(尺寸 $SZ)，移除，请在 Windows 上运行 fetch-core.ps1 补齐"
+                echo "警告: $name 下载异常(尺寸 $SZ)，移除，请在 Windows 上运行 fetch-core.bat 补齐"
                 rm -f "$STAGE/core/$name"
             fi
         else
@@ -64,7 +67,7 @@ PY
         fi
     done
 else
-    echo "警告: 无法获取 Xray 版本号，跳过内核与 geo 下载（将在 Windows 上由 fetch-core.ps1 补齐）"
+    echo "警告: 无法获取 Xray 版本号，跳过内核与 geo 下载（将在 Windows 上由 fetch-core.bat 补齐）"
 fi
 
 echo "==> 4) 复制规则与脚本"

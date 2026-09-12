@@ -35,7 +35,12 @@ namespace ProxyCore.Parsers
                 throw new ProxyCoreException("无法识别订阅格式：既不是 v2rayN/Clash/SIP008。");
 
             var nodes = parser.Parse(raw);
-            foreach (var n in nodes) n.SourceName = sub.Name;
+            foreach (var n in nodes)
+            {
+                n.SourceName = sub.Name;
+                // 记录归属订阅，重新拉取同一订阅时才能精确替换旧节点而不是无脑追加
+                n.SubscriptionId = sub.Id ?? "";
+            }
             return nodes;
         }
     }

@@ -55,13 +55,15 @@ namespace ProxyCore.Models
         public string ShortId { get; set; } = "";       // REALITY shortId
         public string ServiceName { get; set; } = "";   // grpc serviceName
         public bool AllowInsecure { get; set; } = false;
+        public string Alpn { get; set; } = "";          // TLS ALPN, 逗号分隔如 h2,http/1.1
 
         // 额外透传字段(key=value)，用于保留非常用参数
         public Dictionary<string, string> Extra { get; set; } = new Dictionary<string, string>();
 
-        // 运行期字段（不参与序列化）
+        // 运行期字段（会被持久化：延迟结果和原始链接需要跨会话保留，用于排序与"复制链接"）
         public int LatencyMs { get; set; } = -1;
         public string SourceName { get; set; } = "";     // 来自哪个订阅/手动
-        public string RawLink { get; set; } = "";        // 原始链接（用于回填/调试）
+        public string RawLink { get; set; } = "";        // 原始链接（用于复制分享/调试）
+        public string SubscriptionId { get; set; } = ""; // 所属订阅 Id（手动添加为空）
     }
 }
