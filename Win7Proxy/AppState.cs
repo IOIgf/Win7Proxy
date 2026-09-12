@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
+using ProxyCore;
 using ProxyCore.Models;
 
 namespace Win7Proxy
@@ -13,6 +14,9 @@ namespace Win7Proxy
         public List<Node> Nodes { get; set; } = new List<Node>();
         public int SelectedIndex { get; set; } = -1;
         public ProxyMode Mode { get; set; } = ProxyMode.Rule;
+
+        /// <summary>当前使用的内核。Xray 是默认，也是唯一有 Win7 构建的内核。</summary>
+        public CoreKind Core { get; set; } = CoreKind.Xray;
 
         /// <summary>开机自动启动本程序。</summary>
         public bool AutoStart { get; set; } = false;

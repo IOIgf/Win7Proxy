@@ -7,7 +7,8 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AssemblyName>ProxyCore</AssemblyName>
     <RootNamespace>ProxyCore</RootNamespace>
-    <NoWarn>CA1416</NoWarn>
+    <!-- net461 上没有别的可用 HTTP 客户端，WebClient 是刻意使用；net8.0 下的过时警告一并忽略 -->
+    <NoWarn>CA1416;SYSLIB0014</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
@@ -16,5 +17,8 @@
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net461'">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net461" Version="1.0.3" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 </Project>

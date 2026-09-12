@@ -25,6 +25,7 @@ namespace Win7Proxy
         private readonly Label _status;
         private readonly Label _nodeLabel;
         private readonly ComboBox _mode;
+        private ComboBox _coreBox;
         private readonly NotifyIcon _tray;
         private int _sortCol = -1;
         private bool _sortAsc = true;
@@ -148,6 +149,22 @@ namespace Win7Proxy
                 }
             };
             toolPanel.Controls.Add(_mode);
+
+            // 内核选择：不同内核支持的传输方式不同（例如 h2 只有 V2Ray / sing-box 还能用）
+            var coreLabel = new Label
+            {
+                Text = "内核:",
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(80, 84, 92),
+                Margin = new Padding(14, 9, 2, 0)
+            };
+            toolPanel.Controls.Add(coreLabel);
+            _coreBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9F) };
+            foreach (var spec in CoreRegistry.All) _coreBox.Items.Add(spec.Name);
+            _coreBox.SelectedIndex = (int)_state.Core;
+            _coreBox.SelectedIndexChanged += (s, e) => OnCoreKindChanged();
+            toolPanel.Controls.Add(_coreBox);
             _spinTimer = new System.Windows.Forms.Timer { Interval = 120 };
             _spinTimer.Tick += (s, e) =>
             {
@@ -387,9 +404,10 @@ namespace Win7Proxy
         {
             MessageBox.Show(
                 "Win7Proxy " + AppVersion + "\n\n" +
-                "Windows 7 上的代理客户端，基于 xray-core。\n" +
-                "内核：" + (string.IsNullOrEmpty(_coreVersion) ? "未检测到" : _coreVersion) +
-                "\n\n流量接管：系统代理指向本机 Xray，分流由 geoip/geosite 规则完成。",
+                "Windows 7 上的代理客户端，支持 Xray / V2Ray / sing-box 三种内核。\n" +
+                "当前内核：" + CoreRegistry.Of(_state.Core).Name +
+                (string.IsNullOrEmpty(_coreVersion) ? "（未检测到）" : "  " + _coreVersion) +
+                "\n\n流量接管：系统代理指向本机内核端口，分流由 geoip/geosite 规则完成。",
                 "关于 Win7Proxy", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
@@ -870,13 +888,28 @@ namespace Win7Proxy
                 return;
             }
 
+            var spec = CoreRegistry.Of(_state.Core);
             var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
-            var xrayPath = Path.Combine(coreDir, CoreConstants.XrayExe);
-            if (!File.Exists(xrayPath))
+            var coreExe = Path.Combine(coreDir, spec.ExeName);
+            if (!File.Exists(coreExe))
             {
-                if (quiet) { AppendLog("未找到 core/xray.exe，跳过自动启动。"); return; }
-                MessageBox.Show("未找到 core/xray.exe。请运行 fetch-core.bat 下载 xray-win7 内核后重试。",
-                    "缺少内核", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (quiet) { AppendLog("未找到 core/" + spec.ExeName + "，跳过自动启动。"); return; }
+                var ask = MessageBox.Show(
+                    "未找到 core\\" + spec.ExeName + "。\n\n现在下载并安装 " + spec.Name + " 内核吗？",
+                    "缺少内核", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ask == DialogResult.Yes) DownloadCoreAsync(spec.Kind);
+                return;
+            }
+
+            // 内核能力检查：h2 在 Xray 上、REALITY 在 V2Ray 上都属于"写了必然启动失败"，
+            // 在这里拦下来并给出可操作的建议，好过让用户对着"启动失败"四个字发呆
+            var unsupported = spec.ReasonUnsupported(node);
+            if (unsupported != null)
+            {
+                AppendLog("无法启动：" + unsupported);
+                if (!quiet)
+                    MessageBox.Show(unsupported + "\n\n请在工具栏的「内核」下拉框里换一个内核，或者换一个节点。",
+                        "当前内核不支持该节点", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -890,12 +923,16 @@ namespace Win7Proxy
             {
                 Directory.CreateDirectory(coreDir);
                 var cfgPath = Path.Combine(coreDir, CoreConstants.ConfigFile);
-                File.WriteAllText(cfgPath, XrayConfigBuilder.Build(node, _state.Mode).ToJson());
+                File.WriteAllText(cfgPath, CoreConfigFactory.BuildJson(spec.Kind, node, _state.Mode, coreDir));
 
                 // 已知的内核不兼容（比如 h2 传输在新版 xray 里已被移除）提前说清楚，
                 // 否则用户只会看到"内核启动失败"四个字，无从下手
-                foreach (var w in NodeCompat.Warnings(node))
+                foreach (var w in NodeCompat.Warnings(node, spec))
                     AppendLog("兼容性提示：" + w);
+
+                // sing-box 没有 geo 数据时规则会退化，说清楚
+                if (spec.NeedsGeoDb && !CoreConfigFactory.HasSingboxGeo(coreDir))
+                    AppendLog("提示：缺少 geoip.db / geosite.db，sing-box 不使用地理规则，国内外分流会退化。");
 
                 StopCoreOnly();
 
@@ -903,7 +940,7 @@ namespace Win7Proxy
                 var core = _core;
                 _core.LogReceived += s => AppendLog(s);
                 _core.Exited += () => OnCoreExited(core);
-                _core.Start(xrayPath, cfgPath, coreDir, PidFilePath());
+                _core.Start(coreExe, cfgPath, coreDir, PidFilePath());
 
                 bool up = false;
                 for (int i = 0; i < 25; i++)
@@ -977,31 +1014,89 @@ namespace Win7Proxy
 
         private void ProbeCoreVersionAsync()
         {
+            var spec = CoreRegistry.Of(_state.Core);
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir, CoreConstants.XrayExe);
+                var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir, spec.ExeName);
                 var v = CoreProcess.GetCoreVersion(path);
-                if (string.IsNullOrEmpty(v)) return;
-                _coreVersion = v;
-                BeginInvoke((Action)(() => { UpdateStatus(); AppendLog("检测到内核：" + v); }));
+                _coreVersion = v ?? "";
+                BeginInvoke((Action)(() =>
+                {
+                    UpdateStatus();
+                    AppendLog(string.IsNullOrEmpty(v)
+                        ? "未检测到 " + spec.Name + " 内核（core\\" + spec.ExeName + "）。"
+                        : "检测到内核：" + spec.Name + " " + v);
+                }));
+            });
+        }
+
+        /// <summary>切换内核：更新状态与版本显示，运行中则换内核重启。</summary>
+        private void OnCoreKindChanged()
+        {
+            _state.Core = (CoreKind)_coreBox.SelectedIndex;
+            _state.Save();
+
+            var spec = CoreRegistry.Of(_state.Core);
+            AppendLog("已切换内核：" + spec.Name + "（core\\" + spec.ExeName + "）");
+            if (!spec.Win7Usable)
+                AppendLog("提示：" + spec.Name + " 没有 Windows 7 可用的构建，仅适用于 Windows 10/11。");
+
+            ProbeCoreVersionAsync();
+
+            if (_core != null && _currentNode != null)
+            {
+                AppendLog("正在用 " + spec.Name + " 重启...");
+                StartProxy(true);
+            }
+            else
+            {
+                UpdateStatus();
+            }
+        }
+
+        /// <summary>后台下载并安装指定内核，日志实时打到界面上。</summary>
+        private void DownloadCoreAsync(CoreKind kind)
+        {
+            var spec = CoreRegistry.Of(kind);
+            var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
+            AppendLog("开始下载 " + spec.Name + " 内核，请稍候（日志会实时显示）...");
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool ok;
+                try
+                {
+                    ok = CoreDownloader.Install(kind, coreDir, s => BeginInvoke((Action)(() => AppendLog(s))));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke((Action)(() => AppendLog("下载内核时出错：" + ex.Message)));
+                    ok = false;
+                }
+
+                BeginInvoke((Action)(() =>
+                {
+                    if (ok)
+                    {
+                        AppendLog(spec.Name + " 内核安装完成。");
+                        ProbeCoreVersionAsync();
+                    }
+                    else
+                    {
+                        AppendLog(spec.Name + " 内核安装失败。可手动从 GitHub Releases 下载后把 "
+                                  + spec.ExeName + " 放进 core\\ 目录。");
+                    }
+                }));
             });
         }
 
         private void UpdateCore()
         {
-            try
-            {
-                var bat = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fetch-core.bat");
-                Process.Start(new ProcessStartInfo(bat)
-                {
-                    UseShellExecute = true
-                });
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("无法启动 fetch-core.bat，请手动运行它。\n" + ex.Message,
-                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
+            var spec = CoreRegistry.Of(_state.Core);
+            var r = MessageBox.Show("将下载并覆盖当前的 " + spec.Name + " 内核（core\\" + spec.ExeName + "）。\n\n继续吗？",
+                "更新内核", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (r != DialogResult.Yes) return;
+            DownloadCoreAsync(spec.Kind);
         }
 
         private void ShowForm()

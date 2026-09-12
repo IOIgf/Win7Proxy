@@ -21,17 +21,20 @@ namespace ProxyCore
 
         public bool IsRunning => _proc != null && !_proc.HasExited;
 
-        /// <summary>启动 xray： xray.exe run -c configPath。workDir 设为 core 目录。</summary>
-        public void Start(string xrayPath, string configPath, string workDir, string pidFile = null)
+        /// <summary>
+        /// 启动内核：&lt;exe&gt; run -c configPath，工作目录设为 core 目录。
+        /// Xray / V2Ray / sing-box 三个内核都是这个参数形式。
+        /// </summary>
+        public void Start(string coreExe, string configPath, string workDir, string pidFile = null)
         {
-            if (!File.Exists(xrayPath))
-                throw new ProxyCoreException("找不到内核文件：" + xrayPath);
+            if (!File.Exists(coreExe))
+                throw new ProxyCoreException("找不到内核文件：" + coreExe);
 
             _pidFile = pidFile;
 
             var psi = new ProcessStartInfo
             {
-                FileName = xrayPath,
+                FileName = coreExe,
                 Arguments = "run -c \"" + configPath + "\"",
                 WorkingDirectory = workDir,
                 UseShellExecute = false,
@@ -87,15 +90,23 @@ namespace ProxyCore
         }
 
         /// <summary>
-        /// 清理上次异常退出（进程被强杀、系统崩溃）遗留的 xray 进程。
-        /// PID 会复用，所以必须同时校验进程名确实是 xray 才杀，避免误伤别的程序。
+        /// 清理上次异常退出（进程被强杀、系统崩溃）遗留的内核进程。
+        /// PID 会复用，所以必须同时校验进程名确实是内核才杀，避免误伤别的程序。
         /// </summary>
-        public static int KillOrphan(string pidFile)
+        /// <param name="processNames">允许杀掉的进程名；不传则匹配全部支持的内核。</param>
+        public static int KillOrphan(string pidFile, params string[] processNames)
         {
             if (string.IsNullOrEmpty(pidFile) || !File.Exists(pidFile)) return 0;
             int pid;
             try { pid = int.Parse(File.ReadAllText(pidFile).Trim()); }
             catch { return 0; }
+
+            if (processNames == null || processNames.Length == 0)
+            {
+                var all = CoreRegistry.All;
+                processNames = new string[all.Length];
+                for (int i = 0; i < all.Length; i++) processNames[i] = all[i].ProcessName;
+            }
 
             var killed = 0;
             try
@@ -104,9 +115,13 @@ namespace ProxyCore
                 {
                     var name = "";
                     try { name = p.ProcessName; } catch { }
-                    if (name.Equals("xray", StringComparison.OrdinalIgnoreCase))
+                    foreach (var n in processNames)
                     {
-                        try { p.Kill(); p.WaitForExit(2000); killed = 1; } catch { }
+                        if (name.Equals(n, StringComparison.OrdinalIgnoreCase))
+                        {
+                            try { p.Kill(); p.WaitForExit(2000); killed = 1; } catch { }
+                            break;
+                        }
                     }
                 }
             }
@@ -135,22 +150,22 @@ namespace ProxyCore
             catch { return false; }
         }
 
-        /// <summary>读取内核版本号（xray version 的第一行）。失败返回空串。</summary>
-        public static string GetCoreVersion(string xrayPath, int timeoutMs = 5000)
+        /// <summary>读取内核版本号（&lt;exe&gt; version 的第一行）。失败返回空串。</summary>
+        public static string GetCoreVersion(string coreExe, int timeoutMs = 5000)
         {
-            if (string.IsNullOrEmpty(xrayPath) || !File.Exists(xrayPath)) return "";
+            if (string.IsNullOrEmpty(coreExe) || !File.Exists(coreExe)) return "";
             try
             {
                 var psi = new ProcessStartInfo
                 {
-                    FileName = xrayPath,
+                    FileName = coreExe,
                     Arguments = "version",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     CreateNoWindow = true,
                     StandardOutputEncoding = Encoding.UTF8,
-                    WorkingDirectory = Path.GetDirectoryName(xrayPath)
+                    WorkingDirectory = Path.GetDirectoryName(coreExe)
                 };
                 using (var p = Process.Start(psi))
                 {
