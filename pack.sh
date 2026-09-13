@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 DOTNET="$ROOT/.dotnet/dotnet"
 STAGE="$ROOT/stage"
 VER="${1:-}"
-OUT="$ROOT/Win7Proxy-${VER:-v1.1.0}.zip"
+OUT="$ROOT/Win7Proxy-${VER:-v1.2.0}.zip"
 
 echo "==> 1) 构建 Win7Proxy (net461)"
 "$DOTNET" build "$ROOT/Win7Proxy/Win7Proxy.csproj" -c Release -f net461 || exit 1

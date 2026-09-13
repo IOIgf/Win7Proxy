@@ -1,6 +1,5 @@
 using System;
 using System.Net;
-using System.Net.Security;
 using ProxyCore.Models;
 using ProxyCore.Parsers;
 
@@ -9,9 +8,6 @@ namespace ProxyCore
     /// <summary>拉取订阅原始文本并解析为节点。下载启用 TLS1.2（Win7 兼容），不依赖 System.Net.Http。</summary>
     public static class SubscriptionFetcher
     {
-        /// <summary>串行化「临时放宽证书校验」的窗口，避免并发拉取时互相影响。</summary>
-        private static readonly object TlsLock = new object();
-
         static SubscriptionFetcher()
         {
             // Win7 默认未启用 TLS1.2，显式开启以保证 https 订阅可下载。
@@ -34,34 +30,20 @@ namespace ProxyCore
                 !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 throw new ProxyCoreException("订阅地址必须以 http:// 或 https:// 开头。");
 
-            lock (TlsLock)
+            try
             {
-                RemoteCertificateValidationCallback previous = null;
-                if (allowInsecure)
+                using (var wc = new TimeoutWebClient(30000, allowInsecure))
                 {
-                    previous = ServicePointManager.ServerCertificateValidationCallback;
-                    ServicePointManager.ServerCertificateValidationCallback = (s, cert, chain, err) => true;
+                    wc.Headers["User-Agent"] = "Win7Proxy/1.2";
+                    return wc.DownloadString(url);
                 }
-                try
-                {
-                    using (var wc = new TimeoutWebClient(30000))
-                    {
-                        wc.Headers["User-Agent"] = "Win7Proxy/1.1";
-                        return wc.DownloadString(url);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    var hint = (ex is WebException && !allowInsecure)
-                        ? "（若该站点使用自签名证书，可在导入时勾选「跳过证书校验」）"
-                        : "";
-                    throw new ProxyCoreException("订阅下载失败：" + ex.Message + hint);
-                }
-                finally
-                {
-                    if (allowInsecure)
-                        ServicePointManager.ServerCertificateValidationCallback = previous;
-                }
+            }
+            catch (Exception ex)
+            {
+                var hint = (ex is WebException && !allowInsecure)
+                    ? "（若该站点使用自签名证书，可在导入时勾选「跳过证书校验」）"
+                    : "";
+                throw new ProxyCoreException("订阅下载失败：" + ex.Message + hint);
             }
         }
 
@@ -81,11 +63,26 @@ namespace ProxyCore
         private sealed class TimeoutWebClient : WebClient
         {
             private readonly int _timeoutMs;
-            public TimeoutWebClient(int timeoutMs) { _timeoutMs = timeoutMs; }
+            private readonly bool _allowInsecure;
+
+            public TimeoutWebClient(int timeoutMs, bool allowInsecure)
+            {
+                _timeoutMs = timeoutMs;
+                _allowInsecure = allowInsecure;
+            }
+
             protected override WebRequest GetWebRequest(Uri address)
             {
                 var req = base.GetWebRequest(address);
                 if (req != null) req.Timeout = _timeoutMs;
+                var http = req as HttpWebRequest;
+                if (http != null)
+                {
+                    http.ReadWriteTimeout = _timeoutMs;
+                    // 逐请求放宽证书校验，不影响进程里的内核下载等其他 HTTPS 请求。
+                    if (_allowInsecure)
+                        http.ServerCertificateValidationCallback = (s, cert, chain, errors) => true;
+                }
                 return req;
             }
         }

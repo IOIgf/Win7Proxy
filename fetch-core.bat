@@ -28,22 +28,22 @@ if not errorlevel 1 (
 ) else (
   set "ZIP=Xray-windows-64.zip"
 )
-call :dl "XTLS/Xray-core/releases/latest/download/%ZIP%" "%TEMP%\%ZIP%"
+call :dl "XTLS/Xray-core/releases/latest/download/%ZIP%" "%TEMP%\%ZIP%" 500000
 if not exist "%TEMP%\%ZIP%" goto :fail
 call :unzip "%TEMP%\%ZIP%" "%CORE%"
-call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" "%CORE%\geoip.dat"
-call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" "%CORE%\geosite.dat"
+call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" "%CORE%\geoip.dat" 100000
+call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" "%CORE%\geosite.dat" 100000
 goto :done
 
 REM ---------------- V2Ray ----------------
 :v2ray
 set "EXE=v2ray.exe"
 set "ZIP=v2ray-windows-64.zip"
-call :dl "v2fly/v2ray-core/releases/latest/download/%ZIP%" "%TEMP%\%ZIP%"
+call :dl "v2fly/v2ray-core/releases/latest/download/%ZIP%" "%TEMP%\%ZIP%" 500000
 if not exist "%TEMP%\%ZIP%" goto :fail
 call :unzip "%TEMP%\%ZIP%" "%CORE%"
-call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" "%CORE%\geoip.dat"
-call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" "%CORE%\geosite.dat"
+call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" "%CORE%\geoip.dat" 100000
+call :dl "Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" "%CORE%\geosite.dat" 100000
 goto :done
 
 REM ---------------- sing-box ----------------
@@ -59,8 +59,10 @@ if not exist "%SBJSON%" (
 )
 set "SBVER="
 if exist "%SBJSON%" (
-  for /f "tokens=3 delims=:," %%A in ('findstr /i /c:"tag_name" "%SBJSON%"') do if not defined SBVER set "SBVER=%%~A"
+  for /f "tokens=2 delims=:," %%A in ('findstr /i /c:"tag_name" "%SBJSON%"') do if not defined SBVER set "SBVER=%%A"
 )
+if defined SBVER set "SBVER=!SBVER: =!"
+if defined SBVER set "SBVER=!SBVER:"=!"
 if not defined SBVER (
   echo Could not determine the latest sing-box version.
   echo Download it manually from https://github.com/SagerNet/sing-box/releases
@@ -70,12 +72,13 @@ if not defined SBVER (
 set "SBNUM=%SBVER:~1%"
 echo Latest sing-box: %SBVER%
 set "ZIP=sing-box-%SBNUM%-windows-amd64.zip"
-call :dl "SagerNet/sing-box/releases/download/%SBVER%/%ZIP%" "%TEMP%\%ZIP%"
+call :dl "SagerNet/sing-box/releases/download/%SBVER%/%ZIP%" "%TEMP%\%ZIP%" 500000
 if not exist "%TEMP%\%ZIP%" goto :fail
 call :unzip "%TEMP%\%ZIP%" "%CORE%"
-REM sing-box 用自带的 .db 规则集，与 v2ray 系的 .dat 不通用
-call :dl "SagerNet/sing-geoip/releases/latest/download/geoip.db" "%CORE%\geoip.db"
-call :dl "SagerNet/sing-geosite/releases/latest/download/geosite.db" "%CORE%\geosite.db"
+REM sing-box 1.12+ 使用按标签拆分的 .srs 规则集，旧 .db 在 1.14 已失效
+call :dl "SagerNet/sing-geoip/raw/rule-set/geoip-cn.srs" "%CORE%\geoip-cn.srs" 5000
+call :dl "SagerNet/sing-geosite/raw/rule-set/geosite-cn.srs" "%CORE%\geosite-cn.srs" 5000
+call :dl "SagerNet/sing-geosite/raw/rule-set/geosite-category-ads-all.srs" "%CORE%\geosite-category-ads-all.srs" 5000
 goto :done
 
 :done
@@ -102,6 +105,8 @@ exit /b 1
 :dl
 set "REL=%~1"
 set "OUT=%~2"
+set "MIN=%~3"
+if not defined MIN set "MIN=5000"
 if exist "%OUT%" del /f /q "%OUT%" >nul 2>&1
 set "OK=0"
 for %%P in ("https://gh-proxy.org/" "https://ghproxy.com/" "https://ghproxy.net/" "https://mirror.ghproxy.com/" "") do (
@@ -109,16 +114,23 @@ for %%P in ("https://gh-proxy.org/" "https://ghproxy.com/" "https://ghproxy.net/
     set "URL=%%Phttps://github.com/%REL%"
     echo.
     echo Trying: !URL!
+    if exist "%OUT%" del /f /q "%OUT%" >nul 2>&1
     bitsadmin /transfer "w7pdl!RANDOM!" /download /priority normal "!URL!" "%OUT%" >nul 2>&1
-    if exist "%OUT%" for %%S in ("%OUT%") do if %%~zS GTR 500 set "OK=1"
+    if exist "%OUT%" for %%S in ("%OUT%") do if %%~zS GEQ !MIN! set "OK=1"
     if "!OK!"=="0" (
       echo   bitsadmin failed, retry with certutil ...
+      if exist "%OUT%" del /f /q "%OUT%" >nul 2>&1
       certutil -urlcache -split -f "!URL!" "%OUT%" >nul 2>&1
-      if exist "%OUT%" for %%S in ("%OUT%") do if %%~zS GTR 500 set "OK=1"
+      if exist "%OUT%" for %%S in ("%OUT%") do if %%~zS GEQ !MIN! set "OK=1"
     )
   )
 )
-if "!OK!"=="1" (echo   OK: %OUT%) else (echo   FAILED: %REL%)
+if "!OK!"=="1" (
+  echo   OK: %OUT%
+) else (
+  if exist "%OUT%" del /f /q "%OUT%" >nul 2>&1
+  echo   FAILED: %REL%
+)
 goto :eof
 
 :unzip

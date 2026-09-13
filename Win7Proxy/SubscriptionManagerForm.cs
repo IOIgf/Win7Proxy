@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using ProxyCore.Models;
 
@@ -25,6 +26,7 @@ namespace Win7Proxy
         private readonly AppState _state;
         private readonly Action _onChanged;
         private readonly ListBox _list;
+        private bool _busy;
 
         public SubscriptionManagerForm(AppState state, Action onChanged)
         {
@@ -86,69 +88,127 @@ namespace Win7Proxy
             return it?.Sub;
         }
 
-        private void AddNew()
+        private bool TryBeginBusy()
         {
+            if (_busy) return false;
+            _busy = true;
+            Enabled = false;
+            UseWaitCursor = true;
+            return true;
+        }
+
+        private void EndBusy()
+        {
+            _busy = false;
+            Enabled = true;
+            UseWaitCursor = false;
+        }
+
+        private async void AddNew()
+        {
+            Subscription candidate;
             using (var dlg = new SubscriptionForm(null, false))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                try
-                {
-                    var count = dlg.Fetch();
-                    _state.Subscriptions.Add(dlg.Subscription);
-                    ApplyNodes(dlg.Subscription);
-                    MessageBox.Show("已导入 " + count + " 个节点。", "完成",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                catch (ProxyCore.ProxyCoreException ex)
-                {
-                    MessageBox.Show("订阅拉取失败：" + ex.Message, "错误",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                candidate = dlg.CreateSubscription();
             }
+
+            if (!TryBeginBusy()) return;
+            var changed = false;
+            try
+            {
+                await Task.Run(() => ProxyCore.SubscriptionFetcher.Fetch(candidate));
+                var existing = FindByUrl(candidate.Url);
+                if (existing != null)
+                {
+                    candidate.Id = existing.Id;
+                    ReplaceSubscription(existing, candidate);
+                }
+                else
+                {
+                    _state.Subscriptions.Add(candidate);
+                    ApplyNodes(candidate);
+                }
+                changed = true;
+                MessageBox.Show("已导入 " + candidate.Nodes.Count + " 个节点" +
+                                (existing != null ? "（已替换同 URL 的旧订阅）" : "") + "。", "完成",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (ProxyCore.ProxyCoreException ex)
+            {
+                MessageBox.Show("订阅拉取失败：" + ex.Message, "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("订阅处理失败：" + ex.Message, "错误",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally { EndBusy(); }
             Reload();
-            _onChanged?.Invoke();
+            if (changed) _onChanged?.Invoke();
         }
 
-        private void UpdateSelected()
+        private async void UpdateSelected()
         {
             var sub = Selected();
             if (sub == null) { MessageBox.Show("请先选择一个订阅。", "提示"); return; }
+            if (!TryBeginBusy()) return;
+            var candidate = CopyMetadata(sub);
+            var changed = false;
             try
             {
-                var count = ProxyCore.SubscriptionFetcher.Fetch(sub).Nodes.Count;
-                ApplyNodes(sub);
-                MessageBox.Show("已更新，共 " + count + " 个节点。", "完成",
+                await Task.Run(() => ProxyCore.SubscriptionFetcher.Fetch(candidate));
+                ReplaceSubscription(sub, candidate);
+                changed = true;
+                MessageBox.Show("已更新，共 " + candidate.Nodes.Count + " 个节点。", "完成",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (ProxyCore.ProxyCoreException ex)
             {
                 MessageBox.Show("更新失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show("更新失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally { EndBusy(); }
             Reload();
-            _onChanged?.Invoke();
+            if (changed) _onChanged?.Invoke();
         }
 
-        private void EditSelected()
+        private async void EditSelected()
         {
             var sub = Selected();
             if (sub == null) { MessageBox.Show("请先选择一个订阅。", "提示"); return; }
+            Subscription candidate;
             using (var dlg = new SubscriptionForm(sub, true))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                try
-                {
-                    var count = dlg.Fetch();
-                    ApplyNodes(sub);
-                    MessageBox.Show("已保存并更新，共 " + count + " 个节点。", "完成",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                catch (ProxyCore.ProxyCoreException ex)
-                {
-                    MessageBox.Show("保存失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                candidate = dlg.CreateSubscription();
             }
+
+            if (!TryBeginBusy()) return;
+            var changed = false;
+            try
+            {
+                await Task.Run(() => ProxyCore.SubscriptionFetcher.Fetch(candidate));
+                ReplaceSubscription(sub, candidate);
+                changed = true;
+                MessageBox.Show("已保存并更新，共 " + candidate.Nodes.Count + " 个节点。", "完成",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (ProxyCore.ProxyCoreException ex)
+            {
+                MessageBox.Show("保存失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("保存失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally { EndBusy(); }
             Reload();
-            _onChanged?.Invoke();
+            if (changed) _onChanged?.Invoke();
         }
 
         private void DeleteSelected()
@@ -163,6 +223,37 @@ namespace Win7Proxy
             _state.Save();
             Reload();
             _onChanged?.Invoke();
+        }
+
+        private Subscription FindByUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return null;
+            foreach (var sub in _state.Subscriptions)
+                if (string.Equals(sub.Url, url, StringComparison.OrdinalIgnoreCase)) return sub;
+            return null;
+        }
+
+        private static Subscription CopyMetadata(Subscription source)
+        {
+            return new Subscription
+            {
+                Id = source.Id,
+                Name = source.Name,
+                Url = source.Url,
+                Format = source.Format,
+                AllowInsecureTls = source.AllowInsecureTls
+            };
+        }
+
+        private void ReplaceSubscription(Subscription oldSub, Subscription newSub)
+        {
+            var index = _state.Subscriptions.IndexOf(oldSub);
+            if (index < 0) return;
+            newSub.Id = oldSub.Id;
+            ApplyNodesTo(_state, newSub);
+            _state.Subscriptions[index] = newSub;
+            if (_state.DedupeOnImport) Dedupe(_state);
+            _state.Save();
         }
 
         /// <summary>
@@ -180,6 +271,10 @@ namespace Win7Proxy
 
             foreach (var n in sub.Nodes)
             {
+                // Fetch 后订阅可能因为“同 URL 替换”而继承旧 Id，节点必须同步更新，
+                // 否则以后删除/更新该订阅时找不到这些节点。
+                n.SubscriptionId = sub.Id;
+                n.SourceName = sub.Name;
                 int ms;
                 if (n.LatencyMs < 0 && oldLatency.TryGetValue(ProxyCore.NetUtil.Fingerprint(n), out ms))
                     n.LatencyMs = ms;

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using ProxyCore.Models;
 
@@ -54,6 +55,20 @@ namespace ProxyCore
         public string ReasonUnsupported(Node n)
         {
             if (n == null) return "节点为空。";
+            if (string.IsNullOrWhiteSpace(n.Address)) return "节点地址为空。";
+            if (n.Port <= 0 || n.Port > 65535) return "节点端口不合法：" + n.Port + "。";
+
+            if ((n.Type == NodeType.Vmess || n.Type == NodeType.Vless) && string.IsNullOrWhiteSpace(n.UUID))
+                return n.Type + " 节点缺少 UUID。";
+            if (n.Type == NodeType.Trojan && string.IsNullOrEmpty(n.Password))
+                return "Trojan 节点缺少密码。";
+            if (n.Type == NodeType.Shadowsocks)
+            {
+                if (string.IsNullOrWhiteSpace(n.EncryptMethod)) return "Shadowsocks 节点缺少加密方法。";
+                if (string.IsNullOrEmpty(n.Password)) return "Shadowsocks 节点缺少密码。";
+                if (Kind == CoreKind.V2ray && n.EncryptMethod.StartsWith("2022-", StringComparison.OrdinalIgnoreCase))
+                    return "V2Ray 不支持 SS2022 加密，请换用 Xray 或 sing-box。";
+            }
 
             var net = NetUtil.NormalizeNetwork(n.Network);
             if (!SupportsNetwork(net))
@@ -64,9 +79,11 @@ namespace ProxyCore
                 return string.Format("{0} 不支持 {1} 传输{2}。", Name, net, alt);
             }
 
-            if (NetUtil.NormalizeSecurity(n.Extra != null && n.Extra.ContainsKey("security") ? n.Extra["security"] : "") == "reality"
-                && !Reality)
-                return Name + " 不支持 REALITY，请换用 Xray 或 sing-box。";
+            if (NetUtil.NormalizeSecurity(n.Extra != null && n.Extra.ContainsKey("security") ? n.Extra["security"] : "") == "reality")
+            {
+                if (string.IsNullOrWhiteSpace(n.PublicKey)) return "REALITY 节点缺少公钥。";
+                if (!Reality) return Name + " 不支持 REALITY，请换用 Xray 或 sing-box。";
+            }
 
             if (!XtlsFlow && !string.IsNullOrEmpty(n.Flow))
                 return Name + " 不支持 XTLS flow（" + n.Flow + "），请换用 Xray 或去掉 flow 参数。";
@@ -77,6 +94,14 @@ namespace ProxyCore
 
     public static class CoreRegistry
     {
+        public static bool IsWindows7OrEarlier()
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT &&
+                Environment.OSVersion.Platform != PlatformID.Win32Windows) return false;
+            var v = Environment.OSVersion.Version;
+            return v.Major < 6 || (v.Major == 6 && v.Minor <= 1);
+        }
+
         public static readonly CoreSpec Xray = new CoreSpec
         {
             Kind = CoreKind.Xray,

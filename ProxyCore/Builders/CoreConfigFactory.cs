@@ -12,6 +12,10 @@ namespace ProxyCore
         /// </summary>
         public static string BuildJson(CoreKind kind, Node node, ProxyMode mode, string coreDir = null)
         {
+            var spec = CoreRegistry.Of(kind);
+            if (mode == ProxyMode.Rule && spec.NeedsGeoDat && !string.IsNullOrEmpty(coreDir) && !HasV2rayGeo(coreDir))
+                throw new ProxyCoreException("规则模式缺少 geoip.dat 或 geosite.dat，请先更新 " + spec.Name + " 内核数据。");
+
             switch (kind)
             {
                 case CoreKind.V2ray:
@@ -28,8 +32,16 @@ namespace ProxyCore
         public static bool HasSingboxGeo(string coreDir)
         {
             if (string.IsNullOrEmpty(coreDir)) return false;
-            return File.Exists(Path.Combine(coreDir, CoreConstants.GeoIpDb))
-                && File.Exists(Path.Combine(coreDir, CoreConstants.GeoSiteDb));
+            return File.Exists(Path.Combine(coreDir, CoreConstants.GeoIpCnSrs))
+                && File.Exists(Path.Combine(coreDir, CoreConstants.GeoSiteCnSrs))
+                && File.Exists(Path.Combine(coreDir, CoreConstants.GeoSiteAdsSrs));
+        }
+
+        public static bool HasV2rayGeo(string coreDir)
+        {
+            if (string.IsNullOrEmpty(coreDir)) return false;
+            return File.Exists(Path.Combine(coreDir, CoreConstants.GeoIpFile))
+                && File.Exists(Path.Combine(coreDir, CoreConstants.GeoSiteFile));
         }
     }
 }

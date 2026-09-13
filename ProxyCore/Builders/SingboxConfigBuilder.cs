@@ -12,7 +12,7 @@ namespace ProxyCore
     /// </summary>
     public static class SingboxConfigBuilder
     {
-        /// <param name="geoDbAvailable">core 目录下是否已放置 geoip.db / geosite.db。</param>
+        /// <param name="geoDbAvailable">core 目录下是否已放置规则模式需要的三个 .srs 文件。</param>
         public static string BuildJson(Node node, ProxyMode mode, bool geoDbAvailable)
         {
             if (node == null) throw new ProxyCoreException("节点为空，无法生成配置。");

@@ -10,7 +10,7 @@ namespace ProxyCore
     /// 内核下载与安装。
     /// 各内核的发布包结构不同：Xray/V2Ray 的 zip 里 exe 就在根目录或一层子目录，
     /// sing-box 的 zip 名带版本号（必须先在 GitHub API 查最新 tag），
-    /// 且 sing-box 用的是自己的 geoip.db / geosite.db，与 v2ray 系的 .dat 不通用。
+    /// 且 sing-box 使用按标签拆分的 .srs 规则集，与 v2ray 系的 .dat 不通用。
     /// </summary>
     public static class CoreDownloader
     {
@@ -135,7 +135,7 @@ namespace ProxyCore
             {
                 try
                 {
-                    using (var wc = new WebClient())
+                    using (var wc = new TimeoutWebClient(30000))
                     {
                         wc.Headers.Add("User-Agent", "Win7Proxy");
                         wc.Headers.Add("Accept", "application/vnd.github+json");
@@ -163,7 +163,7 @@ namespace ProxyCore
                 log("尝试：" + full);
                 try
                 {
-                    using (var wc = new WebClient())
+                    using (var wc = new TimeoutWebClient(120000))
                     {
                         wc.Headers.Add("User-Agent", "Win7Proxy");
                         wc.DownloadFile(full, outFile);
@@ -194,6 +194,22 @@ namespace ProxyCore
             }
             catch { }
             return null;
+        }
+
+        private sealed class TimeoutWebClient : WebClient
+        {
+            private readonly int _timeoutMs;
+
+            public TimeoutWebClient(int timeoutMs) { _timeoutMs = timeoutMs; }
+
+            protected override WebRequest GetWebRequest(Uri address)
+            {
+                var request = base.GetWebRequest(address);
+                if (request != null) request.Timeout = _timeoutMs;
+                var http = request as HttpWebRequest;
+                if (http != null) http.ReadWriteTimeout = _timeoutMs;
+                return request;
+            }
         }
     }
 }

@@ -14,8 +14,9 @@ namespace Win7Proxy
         private readonly TextBox _name;
         private readonly ComboBox _format;
         private readonly CheckBox _insecure;
+        private readonly string _existingId;
 
-        /// <summary>被编辑/新增的订阅对象。编辑模式下由构造函数传入，Fetch() 会就地更新它。</summary>
+        /// <summary>Fetch() 成功后得到的全新订阅对象；编辑模式会保留原订阅 Id。</summary>
         public Subscription Subscription { get; private set; }
 
         public SubscriptionForm(Subscription existing = null, bool editMode = false)
@@ -63,7 +64,7 @@ namespace Win7Proxy
 
             if (existing != null)
             {
-                Subscription = existing;
+                _existingId = existing.Id;
                 _url.Text = existing.Url;
                 _name.Text = existing.Name;
                 _insecure.Checked = existing.AllowInsecureTls;
@@ -76,17 +77,22 @@ namespace Win7Proxy
         /// <summary>拉取并解析订阅；成功返回节点数，失败抛 ProxyCoreException。</summary>
         public int Fetch()
         {
-            var url = _url.Text.Trim();
-            var name = string.IsNullOrWhiteSpace(_name.Text) ? "订阅" : _name.Text.Trim();
-
-            if (Subscription == null) Subscription = new Subscription();
-            Subscription.Name = name;
-            Subscription.Url = url;
-            Subscription.AllowInsecureTls = _insecure.Checked;
-            Subscription.Format = (SubscriptionFormat)_format.SelectedIndex;
-
+            Subscription = CreateSubscription();
             ProxyCore.SubscriptionFetcher.Fetch(Subscription);
             return Subscription.Nodes.Count;
+        }
+
+        /// <summary>读取表单内容但不联网；调用方可安全地放到后台线程拉取。</summary>
+        public Subscription CreateSubscription()
+        {
+            return new Subscription
+            {
+                Id = string.IsNullOrEmpty(_existingId) ? Guid.NewGuid().ToString("N") : _existingId,
+                Url = _url.Text.Trim(),
+                Name = string.IsNullOrWhiteSpace(_name.Text) ? "订阅" : _name.Text.Trim(),
+                AllowInsecureTls = _insecure.Checked,
+                Format = (SubscriptionFormat)_format.SelectedIndex
+            };
         }
     }
 }

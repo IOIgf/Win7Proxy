@@ -16,15 +16,23 @@ namespace Win7Proxy
 {
     public class MainForm : Form
     {
-        private const string AppVersion = "1.1.1";
+        private static readonly string AppVersion = GetAppVersion();
+
+        private static string GetAppVersion()
+        {
+            var version = typeof(MainForm).Assembly.GetName().Version;
+            return version == null ? "" : version.Major + "." + version.Minor + "." + version.Build;
+        }
 
         private readonly AppState _state;
         private CoreProcess _core;
+        private readonly object _coreLock = new object();
         private readonly DataGridView _grid;
         private readonly TextBox _log;
         private readonly Label _status;
         private readonly Label _nodeLabel;
         private readonly ComboBox _mode;
+        private readonly FlowLayoutPanel _toolPanel;
         private ComboBox _coreBox;
         private readonly NotifyIcon _tray;
         private int _sortCol = -1;
@@ -41,6 +49,7 @@ namespace Win7Proxy
         private ToolStripMenuItem _miDedupe;
         private string _coreVersion = "";
         private Node _currentNode;
+        private bool _busy;
 
         public MainForm()
         {
@@ -74,7 +83,7 @@ namespace Win7Proxy
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 52F));
 
-            var toolPanel = new FlowLayoutPanel
+            _toolPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 AutoSize = true,
@@ -107,7 +116,7 @@ namespace Win7Proxy
                     b.ForeColor = Color.FromArgb(40, 44, 52);
                 }
                 b.Click += h;
-                toolPanel.Controls.Add(b);
+                _toolPanel.Controls.Add(b);
                 return b;
             }
             Btn("导入订阅", (s, e) => ImportSubscription());
@@ -128,7 +137,7 @@ namespace Win7Proxy
                 ForeColor = Color.FromArgb(80, 84, 92),
                 Margin = new Padding(14, 9, 2, 0)
             };
-            toolPanel.Controls.Add(modeLabel);
+            _toolPanel.Controls.Add(modeLabel);
             _mode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9F) };
             _mode.Items.AddRange(new[] { "全局", "规则", "直连" });
             _mode.SelectedIndex = (int)_state.Mode;
@@ -148,7 +157,7 @@ namespace Win7Proxy
                     UpdateStatus();
                 }
             };
-            toolPanel.Controls.Add(_mode);
+            _toolPanel.Controls.Add(_mode);
 
             // 内核选择：不同内核支持的传输方式不同（例如 h2 只有 V2Ray / sing-box 还能用）
             var coreLabel = new Label
@@ -159,12 +168,12 @@ namespace Win7Proxy
                 ForeColor = Color.FromArgb(80, 84, 92),
                 Margin = new Padding(14, 9, 2, 0)
             };
-            toolPanel.Controls.Add(coreLabel);
+            _toolPanel.Controls.Add(coreLabel);
             _coreBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 96, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9F) };
             foreach (var spec in CoreRegistry.All) _coreBox.Items.Add(spec.Name);
             _coreBox.SelectedIndex = (int)_state.Core;
             _coreBox.SelectedIndexChanged += (s, e) => OnCoreKindChanged();
-            toolPanel.Controls.Add(_coreBox);
+            _toolPanel.Controls.Add(_coreBox);
             _spinTimer = new System.Windows.Forms.Timer { Interval = 120 };
             _spinTimer.Tick += (s, e) =>
             {
@@ -178,7 +187,7 @@ namespace Win7Proxy
                             _grid.Rows[idx].Cells["latency"].Value = glyph;
                 }
             };
-            layout.Controls.Add(toolPanel, 0, 0);
+            layout.Controls.Add(_toolPanel, 0, 0);
 
             _grid = new DataGridView
             {
@@ -274,6 +283,7 @@ namespace Win7Proxy
                 Font = new Font("Consolas", 9)
             };
             layout.Controls.Add(_log, 0, 4);
+            _state.PersistenceError += message => AppendLog(message);
 
             Controls.Add(layout);
             var menu = BuildMenu();
@@ -321,9 +331,14 @@ namespace Win7Proxy
 
         private void OnFirstLoad()
         {
+            if (!string.IsNullOrEmpty(_state.LoadWarning))
+                AppendLog(_state.LoadWarning);
+
             // 上次异常退出可能留下一个没人管的 xray，先按 PID 文件回收掉
             var killed = CoreProcess.KillOrphan(PidFilePath());
             if (killed > 0) AppendLog("已清理上次残留的内核进程。");
+            if (SystemProxy.Restore())
+                AppendLog("已恢复上次异常退出前的系统代理设置。");
 
             ProbeCoreVersionAsync();
 
@@ -533,42 +548,71 @@ namespace Win7Proxy
                           (string.IsNullOrEmpty(_coreVersion) ? "" : "  ·  内核 " + _coreVersion));
         }
 
+        private bool TryBeginBusy(string status)
+        {
+            if (_busy) return false;
+            _busy = true;
+            UseWaitCursor = true;
+            if (_toolPanel != null) _toolPanel.Enabled = false;
+            if (MainMenuStrip != null) MainMenuStrip.Enabled = false;
+            SetStatus(status);
+            return true;
+        }
+
+        private void EndBusy()
+        {
+            _busy = false;
+            UseWaitCursor = false;
+            if (_toolPanel != null && !_toolPanel.IsDisposed) _toolPanel.Enabled = true;
+            if (MainMenuStrip != null && !MainMenuStrip.IsDisposed) MainMenuStrip.Enabled = true;
+            UpdateStatus();
+        }
+
         // ---------- 订阅与节点 ----------
 
-        private void ImportSubscription()
+        private async void ImportSubscription()
         {
+            Subscription sub;
             using (var dlg = new SubscriptionForm())
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                try
-                {
-                    var count = dlg.Fetch();
-                    var sub = dlg.Subscription;
-
-                    // 同一个 URL 重复导入时替换旧订阅，而不是把节点无脑追加
-                    var existing = FindByUrl(sub.Url);
-                    if (existing != null)
-                    {
-                        sub.Id = existing.Id;
-                        SubscriptionManagerForm.RemoveNodesFrom(_state, existing.Id);
-                        _state.Subscriptions.Remove(existing);
-                    }
-
-                    _state.Subscriptions.Add(sub);
-                    SubscriptionManagerForm.ApplyNodesTo(_state, sub);
-                    if (_state.DedupeOnImport) SubscriptionManagerForm.Dedupe(_state);
-                    _state.Save();
-                    RefreshGrid();
-                    MessageBox.Show("成功导入 " + count + " 个节点" +
-                                    (existing != null ? "（已替换同名旧订阅）" : "") + "。",
-                        "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    AppendLog("导入订阅「" + sub.Name + "」，" + count + " 个节点。");
-                }
-                catch (ProxyCoreException ex)
-                {
-                    MessageBox.Show("订阅拉取失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                sub = dlg.CreateSubscription();
             }
+
+            if (!TryBeginBusy("状态：正在拉取订阅…")) return;
+            try
+            {
+                await Task.Run(() => SubscriptionFetcher.Fetch(sub));
+                var count = sub.Nodes.Count;
+
+                // 同一个 URL 重复导入时替换旧订阅，而不是把节点无脑追加。
+                var existing = FindByUrl(sub.Url);
+                if (existing != null)
+                {
+                    sub.Id = existing.Id;
+                    SubscriptionManagerForm.RemoveNodesFrom(_state, existing.Id);
+                    _state.Subscriptions.Remove(existing);
+                }
+
+                _state.Subscriptions.Add(sub);
+                SubscriptionManagerForm.ApplyNodesTo(_state, sub);
+                if (_state.DedupeOnImport) SubscriptionManagerForm.Dedupe(_state);
+                _state.Save();
+                RefreshGrid();
+                MessageBox.Show("成功导入 " + count + " 个节点" +
+                                (existing != null ? "（已替换同 URL 的旧订阅）" : "") + "。",
+                    "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                AppendLog("导入订阅「" + sub.Name + "」，" + count + " 个节点。");
+            }
+            catch (ProxyCoreException ex)
+            {
+                MessageBox.Show("订阅拉取失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("订阅处理失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally { EndBusy(); }
         }
 
         private Subscription FindByUrl(string url)
@@ -579,7 +623,7 @@ namespace Win7Proxy
             return null;
         }
 
-        private void UpdateAllSubscriptions()
+        private async void UpdateAllSubscriptions()
         {
             if (_state.Subscriptions.Count == 0)
             {
@@ -587,42 +631,48 @@ namespace Win7Proxy
                 return;
             }
 
-            _testBtn.Enabled = false;
+            if (!TryBeginBusy("状态：正在更新订阅…")) return;
             AppendLog("开始更新 " + _state.Subscriptions.Count + " 个订阅...");
-            ThreadPool.QueueUserWorkItem(_ =>
+            var ok = 0;
+            var fail = new StringBuilder();
+            var total = 0;
+            try
             {
-                var ok = 0;
-                var fail = new StringBuilder();
-                var total = 0;
-                foreach (var sub in new List<Subscription>(_state.Subscriptions))
+                await Task.Run(() =>
                 {
-                    try
+                    foreach (var sub in new List<Subscription>(_state.Subscriptions))
                     {
-                        SubscriptionFetcher.Fetch(sub);
-                        ok++; total += sub.Nodes.Count;
+                        try
+                        {
+                            SubscriptionFetcher.Fetch(sub);
+                            ok++;
+                            total += sub.Nodes.Count;
+                        }
+                        catch (Exception ex)
+                        {
+                            fail.AppendLine("  " + sub.Name + "：" + ex.Message);
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        fail.AppendLine("  " + sub.Name + "：" + ex.Message);
-                    }
-                }
+                });
 
-                BeginInvoke((Action)(() =>
-                {
-                    // 统一重建节点列表：订阅带来的节点全部替换，手动添加的节点保留
-                    RebuildNodesFromSubscriptions();
-                    if (_state.DedupeOnImport) SubscriptionManagerForm.Dedupe(_state);
-                    _state.Save();
-                    RefreshGrid();
-                    _testBtn.Enabled = true;
-                    AppendLog("订阅更新完成：成功 " + ok + " 个，共 " + total + " 个节点。");
-                    if (fail.Length > 0) AppendLog("失败的订阅：\n" + fail);
-                    MessageBox.Show("更新完成：成功 " + ok + " 个订阅，共 " + total + " 个节点。" +
-                                    (fail.Length > 0 ? "\n\n部分订阅失败，详见日志。" : ""),
-                        "更新订阅", MessageBoxButtons.OK,
-                        fail.Length > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
-                }));
-            });
+                // 统一重建节点列表：订阅带来的节点全部替换，手动添加的节点保留。
+                RebuildNodesFromSubscriptions();
+                if (_state.DedupeOnImport) SubscriptionManagerForm.Dedupe(_state);
+                _state.Save();
+                RefreshGrid();
+                AppendLog("订阅更新完成：成功 " + ok + " 个，共 " + total + " 个节点。");
+                if (fail.Length > 0) AppendLog("失败的订阅：\n" + fail);
+                MessageBox.Show("更新完成：成功 " + ok + " 个订阅，共 " + total + " 个节点。" +
+                                (fail.Length > 0 ? "\n\n部分订阅失败，详见日志。" : ""),
+                    "更新订阅", MessageBoxButtons.OK,
+                    fail.Length > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("更新订阅失败：" + ex.Message);
+                MessageBox.Show("更新订阅失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally { EndBusy(); }
         }
 
         /// <summary>按当前订阅列表重建节点：订阅节点全部替换，手动添加的节点保留。</summary>
@@ -867,6 +917,12 @@ namespace Win7Proxy
 
         private void StartProxy(bool quiet)
         {
+            if (_busy)
+            {
+                if (!quiet) MessageBox.Show("正在执行后台操作，请稍候。", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             var node = SelectedNode();
             if (node == null)
             {
@@ -874,7 +930,7 @@ namespace Win7Proxy
                 return;
             }
 
-            // 直连模式：只清系统代理并停内核，不启动 xray。
+            // 直连模式：停止本程序接管并恢复原系统代理设置，不启动内核。
             // 旧版本这里照样起内核、随后又把系统代理清掉，结果是内核空转。
             if (_state.Mode == ProxyMode.Direct)
             {
@@ -882,13 +938,20 @@ namespace Win7Proxy
                 SystemProxy.SetProxy(ProxyMode.Direct);
                 _currentNode = null;
                 UpdateStatus();
-                AppendLog("已切换到直连模式，未启动内核。");
-                if (!quiet) MessageBox.Show("直连模式：已关闭系统代理，不会启动内核。", "直连模式",
+                AppendLog("已切换到直连模式，未启动内核，并已恢复原系统代理设置。");
+                if (!quiet) MessageBox.Show("直连模式：本程序已停止接管系统代理，不会启动内核。", "直连模式",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             var spec = CoreRegistry.Of(_state.Core);
+            if (!spec.Win7Usable && CoreRegistry.IsWindows7OrEarlier())
+            {
+                var message = spec.Name + " 没有可在 Windows 7 上运行的官方构建，请使用 Xray 内核。";
+                AppendLog("无法启动：" + message);
+                if (!quiet) MessageBox.Show(message, "系统不兼容", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
             var coreExe = Path.Combine(coreDir, spec.ExeName);
             if (!File.Exists(coreExe))
@@ -913,12 +976,6 @@ namespace Win7Proxy
                 return;
             }
 
-            // 端口被别的程序占着时，提前告知，避免"看起来启动了其实没连上"
-            if (_core == null && CoreProcess.IsPortListening(CoreConstants.SocksPort, 300))
-            {
-                AppendLog("警告：" + CoreConstants.SocksPort + " 端口已被其他程序占用，内核可能无法启动。");
-            }
-
             try
             {
                 Directory.CreateDirectory(coreDir);
@@ -932,45 +989,67 @@ namespace Win7Proxy
 
                 // sing-box 没有 geo 数据时规则会退化，说清楚
                 if (spec.NeedsGeoDb && !CoreConfigFactory.HasSingboxGeo(coreDir))
-                    AppendLog("提示：缺少 geoip.db / geosite.db，sing-box 不使用地理规则，国内外分流会退化。");
+                    AppendLog("提示：缺少 sing-box 的 .srs 规则集，国内外分流会退化；请更新内核以补齐规则文件。");
 
                 StopCoreOnly();
 
-                _core = new CoreProcess();
-                var core = _core;
-                _core.LogReceived += s => AppendLog(s);
-                _core.Exited += () => OnCoreExited(core);
-                _core.Start(coreExe, cfgPath, coreDir, PidFilePath());
+                // 两个入站端口任一被占用都不能继续。只发警告会把其他程序的监听端口
+                // 误判成当前内核启动成功，随后错误接管系统代理。
+                if (CoreProcess.IsPortListening(CoreConstants.SocksPort, 300) ||
+                    CoreProcess.IsPortListening(CoreConstants.HttpPort, 300))
+                    throw new ProxyCoreException("本地端口 " + CoreConstants.SocksPort + " 或 " +
+                        CoreConstants.HttpPort + " 已被其他程序占用，请先退出冲突的代理软件。");
+
+                var core = new CoreProcess();
+                core.LogReceived += s => AppendLog(s);
+                core.Exited += () => OnCoreExited(core);
+                lock (_coreLock) _core = core;
+                core.Start(coreExe, cfgPath, coreDir, PidFilePath());
 
                 bool up = false;
                 for (int i = 0; i < 25; i++)
                 {
-                    if (CoreProcess.IsPortListening(CoreConstants.SocksPort, 300)) { up = true; break; }
+                    if (!core.IsRunning) break;
+                    if (CoreProcess.IsPortListening(CoreConstants.SocksPort, 150) &&
+                        CoreProcess.IsPortListening(CoreConstants.HttpPort, 150))
+                    {
+                        up = true;
+                        break;
+                    }
                     Thread.Sleep(200);
                 }
 
-                SystemProxy.SetProxy(_state.Mode);
-                _currentNode = node;
-                UpdateStatus();
-
-                if (up)
+                if (!up)
                 {
-                    AppendLog("内核已启动：" + node.Remarks + "（" + _mode.Text + "模式）");
-                }
-                else
-                {
-                    AppendLog("内核已发出启动命令，但 " + CoreConstants.SocksPort + " 端口未在 5 秒内监听，请查看日志。");
+                    AppendLog("内核启动失败：本地入站端口未在 5 秒内全部就绪，请查看日志。");
+                    StopCoreOnly();
+                    SystemProxy.Restore();
+                    _currentNode = null;
+                    UpdateStatus();
                     if (!quiet)
-                        MessageBox.Show("已发送启动命令，但本机端口尚未监听，请查看下方日志。",
-                            "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        MessageBox.Show("内核没有成功启动，系统代理未被接管。请查看下方日志。",
+                            "启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
                 }
+
+                // 与退出回调串行化：若进程在健康检查后立刻退出，回调会在本段结束后
+                // 恢复系统代理；若它已经退出，则这里不会再接管代理。
+                lock (_coreLock)
+                {
+                    if (!ReferenceEquals(core, _core) || !core.IsRunning)
+                        throw new ProxyCoreException("内核在启动完成前已经退出，请查看内核日志。");
+                    SystemProxy.SetProxy(_state.Mode);
+                    _currentNode = node;
+                }
+                UpdateStatus();
+                AppendLog("内核已启动：" + node.Remarks + "（" + _mode.Text + "模式）");
             }
             catch (ProxyCoreException ex)
             {
                 if (!quiet) MessageBox.Show(ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 AppendLog("启动失败：" + ex.Message);
                 StopCoreOnly();
-                SystemProxy.Clear();
+                SystemProxy.Restore();
                 _currentNode = null;
             }
             catch (Exception ex)
@@ -978,38 +1057,47 @@ namespace Win7Proxy
                 if (!quiet) MessageBox.Show(ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 AppendLog("启动失败：" + ex.Message);
                 StopCoreOnly();
-                SystemProxy.Clear();
+                SystemProxy.Restore();
                 _currentNode = null;
             }
         }
 
         private void OnCoreExited(CoreProcess core)
         {
-            // 主动停止时 _core 已被换掉/置空，这时不该当成"内核崩了"
-            if (!ReferenceEquals(core, _core)) return;
+            lock (_coreLock)
+            {
+                // 主动停止时 _core 已被换掉/置空，这时不该当成"内核崩了"
+                if (!ReferenceEquals(core, _core)) return;
+                _core = null;
+                _currentNode = null;
+            }
 
             // 内核自己挂了（配置错误、端口冲突等）时，必须把系统代理撤掉，
             // 否则用户会陷入"代理开着但没人干活"的断网状态。
-            SystemProxy.Clear();
-            _currentNode = null;
+            SystemProxy.Restore();
             UpdateStatus();
-            AppendLog("内核进程已退出，已恢复系统代理为「不使用代理」。");
+            AppendLog("内核进程已退出，已恢复接管前的系统代理设置。");
         }
 
         private void StopCoreOnly()
         {
-            if (_core == null) return;
-            try { _core.Stop(); _core.Dispose(); } catch { }
-            _core = null;
+            CoreProcess core;
+            lock (_coreLock)
+            {
+                core = _core;
+                _core = null;
+            }
+            if (core == null) return;
+            try { core.Stop(); core.Dispose(); } catch { }
         }
 
         private void StopProxy()
         {
             StopCoreOnly();
-            SystemProxy.Clear();
+            SystemProxy.Restore();
             _currentNode = null;
             UpdateStatus();
-            AppendLog("已停止，系统代理已恢复。");
+            AppendLog("已停止，已恢复接管前的系统代理设置。");
         }
 
         private void ProbeCoreVersionAsync()
@@ -1055,39 +1143,47 @@ namespace Win7Proxy
         }
 
         /// <summary>后台下载并安装指定内核，日志实时打到界面上。</summary>
-        private void DownloadCoreAsync(CoreKind kind)
+        private async void DownloadCoreAsync(CoreKind kind, bool restartAfter = false)
         {
             var spec = CoreRegistry.Of(kind);
+            if (!spec.Win7Usable && CoreRegistry.IsWindows7OrEarlier())
+            {
+                MessageBox.Show(spec.Name + " 没有可在 Windows 7 上运行的官方构建，请使用 Xray 内核。",
+                    "系统不兼容", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (!TryBeginBusy("状态：正在下载内核…")) return;
             var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
+            var reconnect = restartAfter && _core != null && _currentNode != null;
+            if (reconnect) StopProxy();
             AppendLog("开始下载 " + spec.Name + " 内核，请稍候（日志会实时显示）...");
 
-            ThreadPool.QueueUserWorkItem(_ =>
+            var ok = false;
+            try
             {
-                bool ok;
-                try
+                ok = await Task.Run(() => CoreDownloader.Install(kind, coreDir, AppendLog));
+                if (ok)
                 {
-                    ok = CoreDownloader.Install(kind, coreDir, s => BeginInvoke((Action)(() => AppendLog(s))));
+                    AppendLog(spec.Name + " 内核安装完成。");
+                    ProbeCoreVersionAsync();
                 }
-                catch (Exception ex)
+                else
                 {
-                    BeginInvoke((Action)(() => AppendLog("下载内核时出错：" + ex.Message)));
-                    ok = false;
+                    AppendLog(spec.Name + " 内核安装失败。可手动从 GitHub Releases 下载后把 "
+                              + spec.ExeName + " 放进 core\\ 目录。");
                 }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("下载内核时出错：" + ex.Message);
+            }
+            finally { EndBusy(); }
 
-                BeginInvoke((Action)(() =>
-                {
-                    if (ok)
-                    {
-                        AppendLog(spec.Name + " 内核安装完成。");
-                        ProbeCoreVersionAsync();
-                    }
-                    else
-                    {
-                        AppendLog(spec.Name + " 内核安装失败。可手动从 GitHub Releases 下载后把 "
-                                  + spec.ExeName + " 放进 core\\ 目录。");
-                    }
-                }));
-            });
+            if (ok && reconnect)
+            {
+                AppendLog("内核更新完成，正在重新连接...");
+                StartProxy(true);
+            }
         }
 
         private void UpdateCore()
@@ -1096,7 +1192,7 @@ namespace Win7Proxy
             var r = MessageBox.Show("将下载并覆盖当前的 " + spec.Name + " 内核（core\\" + spec.ExeName + "）。\n\n继续吗？",
                 "更新内核", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (r != DialogResult.Yes) return;
-            DownloadCoreAsync(spec.Kind);
+            DownloadCoreAsync(spec.Kind, _core != null && _currentNode != null);
         }
 
         private void ShowForm()

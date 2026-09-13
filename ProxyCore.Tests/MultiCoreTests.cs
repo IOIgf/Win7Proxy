@@ -168,8 +168,10 @@ namespace ProxyCore.Tests
             Directory.CreateDirectory(dir);
             try
             {
-                File.WriteAllText(Path.Combine(dir, CoreConstants.GeoIpDb), "x");
-                File.WriteAllText(Path.Combine(dir, CoreConstants.GeoSiteDb), "x");
+                File.WriteAllText(Path.Combine(dir, CoreConstants.GeoIpCnSrs), "x");
+                File.WriteAllText(Path.Combine(dir, CoreConstants.GeoSiteCnSrs), "x");
+                Assert.False(CoreConfigFactory.HasSingboxGeo(dir));
+                File.WriteAllText(Path.Combine(dir, CoreConstants.GeoSiteAdsSrs), "x");
 
                 Assert.True(CoreConfigFactory.HasSingboxGeo(dir));
 
@@ -177,6 +179,28 @@ namespace ProxyCore.Tests
                 var route = JObject.Parse(withGeo)["route"];
                 Assert.NotNull(route["rule_set"]);
                 Assert.NotEmpty((JArray)route["rule_set"]);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void V2Ray系规则模式需要完整geo数据()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "w7p-geo-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                Assert.False(CoreConfigFactory.HasV2rayGeo(dir));
+                Assert.Throws<ProxyCoreException>(() =>
+                    CoreConfigFactory.BuildJson(CoreKind.Xray, H2Node(), ProxyMode.Rule, dir));
+
+                File.WriteAllText(Path.Combine(dir, CoreConstants.GeoIpFile), "x");
+                Assert.False(CoreConfigFactory.HasV2rayGeo(dir));
+                File.WriteAllText(Path.Combine(dir, CoreConstants.GeoSiteFile), "x");
+                Assert.True(CoreConfigFactory.HasV2rayGeo(dir));
             }
             finally
             {
@@ -193,6 +217,44 @@ namespace ProxyCore.Tests
             Assert.Null(CoreRegistry.Xray.ReasonUnsupported(n));
             Assert.NotNull(CoreRegistry.V2ray.ReasonUnsupported(n));
             Assert.Null(CoreRegistry.Singbox.ReasonUnsupported(n));
+        }
+
+        [Fact]
+        public void SS2022不能使用V2Ray内核()
+        {
+            var n = new Node
+            {
+                Type = NodeType.Shadowsocks,
+                Address = "1.2.3.4",
+                Port = 443,
+                EncryptMethod = "2022-blake3-aes-128-gcm",
+                Password = "MDEyMzQ1Njc4OWFiY2RlZg=="
+            };
+
+            Assert.Contains("SS2022", CoreRegistry.V2ray.ReasonUnsupported(n));
+            Assert.Null(CoreRegistry.Xray.ReasonUnsupported(n));
+            Assert.Null(CoreRegistry.Singbox.ReasonUnsupported(n));
+        }
+
+        [Fact]
+        public void 启动前拒绝缺少关键字段的节点()
+        {
+            var n = H2Node();
+            n.Address = "";
+            Assert.Contains("地址", CoreRegistry.V2ray.ReasonUnsupported(n));
+
+            n = H2Node();
+            n.Port = 70000;
+            Assert.Contains("端口", CoreRegistry.V2ray.ReasonUnsupported(n));
+
+            n = H2Node();
+            n.UUID = "";
+            Assert.Contains("UUID", CoreRegistry.V2ray.ReasonUnsupported(n));
+
+            n = RealityVless();
+            n.Flow = "";
+            n.PublicKey = "";
+            Assert.Contains("公钥", CoreRegistry.Singbox.ReasonUnsupported(n));
         }
     }
 }

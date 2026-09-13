@@ -30,7 +30,7 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VER="${GITHUB_REF#refs/tags/}"
           else
-            VER="1.1.0-dev.${GITHUB_RUN_NUMBER}"
+            VER="1.2.0-dev.${GITHUB_RUN_NUMBER}"
           fi
           echo "VER=$VER" >> "$GITHUB_OUTPUT"
           echo "版本号: $VER"
