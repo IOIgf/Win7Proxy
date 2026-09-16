@@ -68,6 +68,75 @@ namespace ProxyCore.Tests
         }
 
         [Fact]
+        public void Hysteria2Link()
+        {
+            var node = V2rayNParser.ParseLink(
+                "hysteria2://letmein@example.com:8443/?insecure=1&obfs=salamander&obfs-password=gawrgura" +
+                "&sni=real.example.com&pinSHA256=dead:beef&up=100&down=200#测试");
+            Assert.Equal(NodeType.Hysteria2, node.Type);
+            Assert.Equal("example.com", node.Address);
+            Assert.Equal(8443, node.Port);
+            Assert.Equal("letmein", node.Password);
+            Assert.Equal("real.example.com", node.SNI);
+            Assert.True(node.TLS);
+            Assert.True(node.AllowInsecure);
+            Assert.Equal("salamander", node.Obfs);
+            Assert.Equal("gawrgura", node.ObfsPassword);
+            Assert.Equal("dead:beef", node.PinnedCertSha256);
+            Assert.Equal(100, node.UpMbps);
+            Assert.Equal(200, node.DownMbps);
+        }
+
+        [Fact]
+        public void Hysteria2Hy2别名与端口跳跃()
+        {
+            var node = V2rayNParser.ParseLink("hy2://pw@host.example:443,20000-30000/?sni=x.example#n");
+            Assert.Equal(NodeType.Hysteria2, node.Type);
+            Assert.Equal("host.example", node.Address);
+            Assert.Equal(443, node.Port);
+            Assert.Equal("20000-30000", node.Ports);
+            Assert.Equal("pw", node.Password);
+
+            var parser = new V2rayNParser();
+            Assert.True(parser.CanParse("hy2://pw@host.example:443#n"));
+        }
+
+        [Fact]
+        public void ClashHysteria2()
+        {
+            var yaml = @"proxies:
+  - name: ""hy2""
+    type: hysteria2
+    server: 5.5.5.5
+    port: 443
+    password: pw
+    sni: example.com
+    skip-cert-verify: true
+    obfs: salamander
+    obfs-password: op
+    up: ""100 Mbps""
+    down: ""200 Mbps""
+    ports: 20000-30000
+    pinSHA256: deadbeef
+";
+            var nodes = new ClashParser().Parse(yaml);
+            Assert.Single(nodes);
+            var n = nodes[0];
+            Assert.Equal(NodeType.Hysteria2, n.Type);
+            Assert.Equal("5.5.5.5", n.Address);
+            Assert.Equal(443, n.Port);
+            Assert.Equal("pw", n.Password);
+            Assert.Equal("example.com", n.SNI);
+            Assert.True(n.AllowInsecure);
+            Assert.Equal("salamander", n.Obfs);
+            Assert.Equal("op", n.ObfsPassword);
+            Assert.Equal(100, n.UpMbps);
+            Assert.Equal(200, n.DownMbps);
+            Assert.Equal("20000-30000", n.Ports);
+            Assert.Equal("deadbeef", n.PinnedCertSha256);
+        }
+
+        [Fact]
         public void V2rayNBase64Subscription()
         {
             var vmessJson = "{\"v\":\"2\",\"ps\":\"n1\",\"add\":\"1.2.3.4\",\"port\":\"443\",\"id\":\"11111111-1111-1111-1111-111111111111\",\"aid\":\"0\",\"scy\":\"aes-128-gcm\",\"net\":\"tcp\",\"tls\":\"\"}";
