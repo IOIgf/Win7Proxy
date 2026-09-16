@@ -749,7 +749,7 @@ namespace Win7Proxy
 
         private void AddNode()
         {
-            using (var dlg = new InputDialog("添加节点", "粘贴单条链接 (vmess:// / vless:// / trojan:// / ss://)："))
+            using (var dlg = new InputDialog("添加节点", "粘贴单条链接 (vmess:// / vless:// / trojan:// / ss:// / hysteria2://)："))
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 try

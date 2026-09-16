@@ -36,6 +36,8 @@ namespace ProxyCore
         public bool Reality;
         /// <summary>是否支持 vless 的 XTLS flow（xtls-rprx-vision 等）。</summary>
         public bool XtlsFlow;
+        /// <summary>是否支持 Hysteria2 出站（QUIC，仅 sing-box）。</summary>
+        public bool Hysteria2;
         /// <summary>使用 v2ray 系的 geoip.dat / geosite.dat。</summary>
         public bool NeedsGeoDat;
         /// <summary>使用 sing-box 的 geo 规则数据（1.12+ 起为按标签拆分的 .srs 规则集）。</summary>
@@ -68,6 +70,15 @@ namespace ProxyCore
                 if (string.IsNullOrEmpty(n.Password)) return "Shadowsocks 节点缺少密码。";
                 if (Kind == CoreKind.V2ray && n.EncryptMethod.StartsWith("2022-", StringComparison.OrdinalIgnoreCase))
                     return "V2Ray 不支持 SS2022 加密，请换用 Xray 或 sing-box。";
+            }
+
+            if (n.Type == NodeType.Hysteria2)
+            {
+                if (!Hysteria2)
+                    return Name + " 不支持 Hysteria2，请切换到 Xray 或 sing-box 内核。";
+                if (string.IsNullOrEmpty(n.Password))
+                    return "Hysteria2 节点缺少密码。";
+                return null; // Hysteria2 自带 QUIC 传输，不走 v2ray 的 network 概念
             }
 
             var net = NetUtil.NormalizeNetwork(n.Network);
@@ -111,6 +122,7 @@ namespace ProxyCore
             Win7Usable = true,
             Reality = true,
             XtlsFlow = true,
+            Hysteria2 = true,
             NeedsGeoDat = true,
             Networks = new HashSet<string> { "tcp", "ws", "grpc", "httpupgrade", "quic" }
         };
@@ -124,6 +136,7 @@ namespace ProxyCore
             Win7Usable = false,
             Reality = false,
             XtlsFlow = false,
+            Hysteria2 = false,
             NeedsGeoDat = true,
             Networks = new HashSet<string> { "tcp", "ws", "grpc", "h2", "kcp" }
         };
@@ -137,6 +150,7 @@ namespace ProxyCore
             Win7Usable = false,
             Reality = true,
             XtlsFlow = false,
+            Hysteria2 = true,
             NeedsGeoDb = true,
             Networks = new HashSet<string> { "tcp", "ws", "grpc", "h2", "httpupgrade", "quic" }
         };

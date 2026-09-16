@@ -25,7 +25,7 @@ namespace ProxyCore
             if (spec == null) spec = CoreRegistry.Xray;
 
             var net = NetUtil.NormalizeNetwork(n.Network);
-            if (!spec.SupportsNetwork(net))
+            if (n.Type != NodeType.Hysteria2 && !spec.SupportsNetwork(net))
             {
                 var alt = new List<string>();
                 foreach (var s in CoreRegistry.All)
@@ -34,6 +34,9 @@ namespace ProxyCore
                 list.Add(spec.Name + " 不支持 " + net + " 传输，内核会拒绝启动"
                     + (alt.Count > 0 ? "（" + string.Join(" / ", alt.ToArray()) + " 仍支持）" : "") + "。");
             }
+
+            if (n.Type == NodeType.Hysteria2 && !spec.Hysteria2)
+                list.Add(spec.Name + " 不支持 Hysteria2，内核会拒绝启动（Xray 与 sing-box 支持）。");
 
             if (n.Type == NodeType.Vmess && !string.IsNullOrEmpty(n.Security) &&
                 (n.Security == "none" || n.Security == "zero"))

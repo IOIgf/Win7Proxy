@@ -149,6 +149,17 @@ namespace ProxyCore
                     ob["settings"] = BuildAuthServers(n);
                     break;
 
+                case NodeType.Hysteria2:
+                    if (!spec.Hysteria2)
+                        throw new ProxyCoreException(spec.Name + " 不支持 Hysteria2 节点，请切换到 Xray 或 sing-box 内核。");
+                    ob["protocol"] = "hysteria";
+                    ob["settings"] = new JObject {
+                        ["version"] = 2,
+                        ["address"] = n.Address,
+                        ["port"] = n.Port
+                    };
+                    break;
+
                 default:
                     throw new ProxyCoreException("不支持的节点类型: " + n.Type);
             }
@@ -193,6 +204,8 @@ namespace ProxyCore
 
         private static JObject BuildStreamSettings(CoreSpec spec, Node n)
         {
+            if (n.Type == NodeType.Hysteria2) return BuildHysteria2Stream(n);
+
             var ss = new JObject();
             var network = NetUtil.NormalizeNetwork(n.Network);
             ss["network"] = NetworkName(spec, network);
@@ -280,6 +293,53 @@ namespace ProxyCore
             {
                 ss["security"] = "none";
             }
+            return ss;
+        }
+
+        /// <summary>
+        /// Xray 的 Hysteria 2 = hysteria 出站 + hysteria QUIC 传输：认证放在传输层的
+        /// hysteriaSettings.auth，混淆与端口跳跃/带宽走 finalmask（salamander / quicParams）。
+        /// </summary>
+        private static JObject BuildHysteria2Stream(Node n)
+        {
+            var serverName = string.IsNullOrEmpty(n.SNI) ? FirstNonEmpty(n.Host, n.Address) : n.SNI;
+
+            var tls = new JObject {
+                ["serverName"] = serverName,
+                ["allowInsecure"] = n.AllowInsecure
+            };
+            var alpn = NetUtil.SplitAlpn(n.Alpn);
+            if (alpn.Count == 0) alpn.Add("h3");
+            tls["alpn"] = new JArray(alpn.ToArray());
+
+            var ss = new JObject {
+                ["network"] = "hysteria",
+                ["security"] = "tls",
+                ["hysteriaSettings"] = new JObject {
+                    ["version"] = 2,
+                    ["auth"] = n.Password,
+                    ["udpIdleTimeout"] = 60
+                },
+                ["tlsSettings"] = tls
+            };
+
+            var quic = new JObject();
+            var ports = NetUtil.SplitPortsRaw(n.Ports);
+            if (ports.Count > 0) quic["udpHop"] = new JObject { ["ports"] = string.Join(",", ports.ToArray()) };
+            if (n.UpMbps > 0) quic["brutalUp"] = n.UpMbps + " mbps";
+            if (n.DownMbps > 0) quic["brutalDown"] = n.DownMbps + " mbps";
+
+            var fm = new JObject();
+            if (!string.IsNullOrEmpty(n.Obfs) && !string.IsNullOrEmpty(n.ObfsPassword))
+                fm["udp"] = new JArray {
+                    new JObject {
+                        ["type"] = "salamander",
+                        ["settings"] = new JObject { ["password"] = n.ObfsPassword }
+                    }
+                };
+            if (quic.Count > 0) fm["quicParams"] = quic;
+            if (fm.Count > 0) ss["finalmask"] = fm;
+
             return ss;
         }
 

@@ -107,6 +107,15 @@ namespace ProxyCore
                     if (!string.IsNullOrEmpty(n.Password)) ob["password"] = n.Password;
                     break;
 
+                case NodeType.Hysteria2:
+                    ob["type"] = "hysteria2";
+                    ob["password"] = n.Password;
+                    if (!string.IsNullOrEmpty(n.Obfs) && !string.IsNullOrEmpty(n.ObfsPassword))
+                        ob["obfs"] = new JObject { ["type"] = n.Obfs, ["password"] = n.ObfsPassword };
+                    if (n.UpMbps > 0) ob["up_mbps"] = n.UpMbps;
+                    if (n.DownMbps > 0) ob["down_mbps"] = n.DownMbps;
+                    break;
+
                 default:
                     throw new ProxyCoreException("不支持的节点类型: " + n.Type);
             }
@@ -114,10 +123,16 @@ namespace ProxyCore
             ob["server"] = n.Address;
             ob["server_port"] = n.Port;
 
+            if (n.Type == NodeType.Hysteria2)
+            {
+                var ports = NetUtil.SplitPorts(n.Ports);
+                if (ports.Count > 0) ob["server_ports"] = new JArray(ports.ToArray());
+            }
+
             var transport = BuildTransport(n);
             if (transport != null) ob["transport"] = transport;
 
-            var tls = BuildTls(n);
+            var tls = n.Type == NodeType.Hysteria2 ? BuildHysteria2Tls(n) : BuildTls(n);
             if (tls != null) ob["tls"] = tls;
 
             return ob;
@@ -193,6 +208,29 @@ namespace ProxyCore
 
             if (!string.IsNullOrEmpty(n.Fingerprint))
                 tls["utls"] = new JObject { ["enabled"] = true, ["fingerprint"] = n.Fingerprint };
+
+            return tls;
+        }
+
+        /// <summary>
+        /// Hysteria2 基于 QUIC，TLS 恒开启且 ALPN 必须是 h3；不能套用 v2ray 系的 h2 默认值。
+        /// </summary>
+        private static JObject BuildHysteria2Tls(Node n)
+        {
+            var serverName = string.IsNullOrEmpty(n.SNI) ? FirstNonEmpty(n.Host, n.Address) : n.SNI;
+            var tls = new JObject
+            {
+                ["enabled"] = true,
+                ["server_name"] = serverName,
+                ["insecure"] = n.AllowInsecure
+            };
+
+            var alpn = NetUtil.SplitAlpn(n.Alpn);
+            if (alpn.Count == 0) alpn.Add("h3");
+            tls["alpn"] = new JArray(alpn.ToArray());
+
+            if (!string.IsNullOrEmpty(n.PinnedCertSha256))
+                tls["certificate_public_key_sha256"] = new JArray(n.PinnedCertSha256.Replace(":", "").Replace(" ", ""));
 
             return tls;
         }
