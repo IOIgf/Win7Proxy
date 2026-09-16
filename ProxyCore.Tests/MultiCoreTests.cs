@@ -256,5 +256,97 @@ namespace ProxyCore.Tests
             n.PublicKey = "";
             Assert.Contains("公钥", CoreRegistry.Singbox.ReasonUnsupported(n));
         }
+
+        // ---------- Hysteria2 ----------
+
+        private static Node Hysteria2Node()
+        {
+            return new Node
+            {
+                Type = NodeType.Hysteria2,
+                Remarks = "hy2",
+                Address = "1.2.3.4",
+                Port = 443,
+                Password = "pw",
+                SNI = "example.com",
+                AllowInsecure = true,
+                Obfs = "salamander",
+                ObfsPassword = "op",
+                UpMbps = 100,
+                DownMbps = 200,
+                Ports = "20000-30000",
+                PinnedCertSha256 = "dead:beef"
+            };
+        }
+
+        [Fact]
+        public void 能力表_Hysteria2由Xray与singbox支持()
+        {
+            var n = Hysteria2Node();
+            Assert.Null(CoreRegistry.Xray.ReasonUnsupported(n));
+            Assert.Null(CoreRegistry.Singbox.ReasonUnsupported(n));
+            Assert.Contains("Hysteria2", CoreRegistry.V2ray.ReasonUnsupported(n));
+
+            // 缺密码也要拦下
+            n.Password = "";
+            Assert.Contains("密码", CoreRegistry.Singbox.ReasonUnsupported(n));
+        }
+
+        [Fact]
+        public void singbox配置_Hysteria2出站带obfs与h3与端口跳跃()
+        {
+            var json = CoreConfigFactory.BuildJson(CoreKind.Singbox, Hysteria2Node(), ProxyMode.Global);
+            var ob = (JObject)JObject.Parse(json)["outbounds"][0];
+
+            Assert.Equal("hysteria2", (string)ob["type"]);
+            Assert.Equal("1.2.3.4", (string)ob["server"]);
+            Assert.Equal(443, (int)ob["server_port"]);
+            Assert.Equal("pw", (string)ob["password"]);
+            Assert.Equal("salamander", (string)ob["obfs"]["type"]);
+            Assert.Equal("op", (string)ob["obfs"]["password"]);
+            Assert.Equal(100, (int)ob["up_mbps"]);
+            Assert.Equal(200, (int)ob["down_mbps"]);
+            Assert.Equal("20000:30000", (string)ob["server_ports"][0]);
+
+            // Hysteria2 基于 QUIC：TLS 恒开启、ALPN 默认 h3（不能是 v2ray 系的 h2）
+            Assert.True((bool)ob["tls"]["enabled"]);
+            Assert.True((bool)ob["tls"]["insecure"]);
+            Assert.Equal("example.com", (string)ob["tls"]["server_name"]);
+            Assert.Equal("h3", (string)ob["tls"]["alpn"][0]);
+            Assert.Equal("deadbeef", (string)ob["tls"]["certificate_public_key_sha256"][0]);
+            Assert.Null(ob["transport"]);
+        }
+
+        [Fact]
+        public void V2Ray配置_遇到Hysteria2节点明确报错()
+        {
+            Assert.Throws<ProxyCoreException>(() =>
+                CoreConfigFactory.BuildJson(CoreKind.V2ray, Hysteria2Node(), ProxyMode.Global));
+        }
+
+        [Fact]
+        public void Xray配置_Hysteria2出站带传输层认证与finalmask()
+        {
+            var json = CoreConfigFactory.BuildJson(CoreKind.Xray, Hysteria2Node(), ProxyMode.Global);
+            var ob = (JObject)JObject.Parse(json)["outbounds"][0];
+            var ss = (JObject)ob["streamSettings"];
+
+            Assert.Equal("hysteria", (string)ob["protocol"]);
+            Assert.Equal(2, (int)ob["settings"]["version"]);
+            Assert.Equal("1.2.3.4", (string)ob["settings"]["address"]);
+            Assert.Equal(443, (int)ob["settings"]["port"]);
+
+            Assert.Equal("hysteria", (string)ss["network"]);
+            Assert.Equal("tls", (string)ss["security"]);
+            Assert.Equal("pw", (string)ss["hysteriaSettings"]["auth"]);
+            Assert.Equal("example.com", (string)ss["tlsSettings"]["serverName"]);
+            Assert.True((bool)ss["tlsSettings"]["allowInsecure"]);
+            Assert.Equal("h3", (string)ss["tlsSettings"]["alpn"][0]);
+
+            Assert.Equal("salamander", (string)ss["finalmask"]["udp"][0]["type"]);
+            Assert.Equal("op", (string)ss["finalmask"]["udp"][0]["settings"]["password"]);
+            Assert.Equal("20000-30000", (string)ss["finalmask"]["quicParams"]["udpHop"]["ports"]);
+            Assert.Equal("100 mbps", (string)ss["finalmask"]["quicParams"]["brutalUp"]);
+        }
     }
 }
