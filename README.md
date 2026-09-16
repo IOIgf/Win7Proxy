@@ -8,7 +8,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 **Hysteria2 由 Xray 与 sing-box 支持**（V2Ray 不支持）；Xray 官方的 Win7 构建同样包含 Hysteria 2，
 因此 Win7 上也能用，只需把内核更新到支持该协议的版本（官方 v26.3.27 起，用「更新内核」即可拉到最新版）。
 
-当前版本：**v1.2.0**
+当前版本：**v1.3.0**
 
 ## 一、前置条件（一次性的）
 
@@ -22,7 +22,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 
 ## 二、首次运行
 
-1. 解压 `Win7Proxy-v1.2.0.zip` 到任意目录（路径不要含中文/空格最佳）。
+1. 解压 `Win7Proxy-v1.3.0.zip` 到任意目录（路径不要含中文/空格最佳）。
 2. 内核已随包提供：`core\xray.exe` 与 `core\geoip.dat` / `core\geosite.dat` 解压即用。
    仅当要**更新**内核时，再运行 `fetch-core.bat` 拉取最新 xray-win7（内置多个 GitHub 镜像，逐个尝试）。
 3. 双击 `Win7Proxy.exe`。
@@ -104,11 +104,11 @@ Linux/macOS 上可用 `./pack.sh [版本号]` 构建并打包（脚本假定 .NE
 仓库已配置 GitHub Actions（`.github/workflows/build.yml`）：推送 `main`、发起 PR 或手动触发时，
   会先跑单元测试，再在 Linux runner 上构建 `net461` Release，下载 xray-win7 内核与 geo 数据
 （多镜像兜底），打包成 `Win7Proxy-<版本号>.zip` 上传为构件；
-打 `v*` 标签（如 `v1.2.0`）推送时，会自动创建 GitHub Release 并附上该 zip。
+打 `v*` 标签（如 `v1.3.0`）推送时，会自动创建 GitHub Release 并附上该 zip。
 
 ## 七、版本记录
 
-### 未发布
+### v1.3.0
 
 - 新增 **Hysteria2** 节点支持：可解析 `hysteria2://` / `hy2://` 链接与 Clash `type: hysteria2`，
   支持 salamander 混淆、端口跳跃、上下行带宽、`pinSHA256` 证书固定。

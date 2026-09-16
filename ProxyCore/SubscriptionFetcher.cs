@@ -34,7 +34,7 @@ namespace ProxyCore
             {
                 using (var wc = new TimeoutWebClient(30000, allowInsecure))
                 {
-                    wc.Headers["User-Agent"] = "Win7Proxy/1.2";
+                    wc.Headers["User-Agent"] = "Win7Proxy/1.3";
                     return wc.DownloadString(url);
                 }
             }
