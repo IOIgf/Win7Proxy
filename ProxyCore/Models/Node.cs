@@ -4,6 +4,10 @@ using System.Collections.Generic;
 namespace ProxyCore.Models
 {
     /// <summary>支持的节点协议类型。</summary>
+    /// <remarks>
+    /// 枚举按整数序列化进 app.json，新增成员必须追加在末尾，
+    /// 否则会改变老配置里已有协议的数值。
+    /// </remarks>
     public enum NodeType
     {
         Vmess,
@@ -11,7 +15,9 @@ namespace ProxyCore.Models
         Trojan,
         Shadowsocks,
         Socks,
-        Http
+        Http,
+        /// <summary>Hysteria2：基于 QUIC，仅 sing-box 内核支持（Xray / V2Ray 均不支持）。</summary>
+        Hysteria2
     }
 
     /// <summary>代理分流模式。</summary>
@@ -56,6 +62,14 @@ namespace ProxyCore.Models
         public string ServiceName { get; set; } = "";   // grpc serviceName
         public bool AllowInsecure { get; set; } = false;
         public string Alpn { get; set; } = "";          // TLS ALPN, 逗号分隔如 h2,http/1.1
+
+        // hysteria2
+        public string Obfs { get; set; } = "";           // 混淆类型(通常 salamander)
+        public string ObfsPassword { get; set; } = "";   // 混淆密码
+        public int UpMbps { get; set; } = 0;             // 上行带宽(Mbps)
+        public int DownMbps { get; set; } = 0;           // 下行带宽(Mbps)
+        public string Ports { get; set; } = "";          // 端口跳跃范围, 逗号分隔如 20000:30000
+        public string PinnedCertSha256 { get; set; } = ""; // 证书公钥 pin (pinSHA256)
 
         // 额外透传字段(key=value)，用于保留非常用参数
         public Dictionary<string, string> Extra { get; set; } = new Dictionary<string, string>();

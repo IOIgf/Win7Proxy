@@ -79,6 +79,27 @@ namespace ProxyCore
             return list;
         }
 
+        /// <summary>拆分 Hysteria2 端口跳跃范围（如 "20000-30000,443"），保留原始的区间写法。</summary>
+        public static List<string> SplitPortsRaw(string ports)
+        {
+            var list = new List<string>();
+            if (string.IsNullOrWhiteSpace(ports)) return list;
+            foreach (var part in ports.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var p = part.Trim();
+                if (p != "") list.Add(p);
+            }
+            return list;
+        }
+
+        /// <summary>sing-box 的 server_ports 用冒号表示区间（Xray 用连字符，见 <see cref="SplitPortsRaw"/>）。</summary>
+        public static List<string> SplitPorts(string ports)
+        {
+            var list = new List<string>();
+            foreach (var p in SplitPortsRaw(ports)) list.Add(p.Replace('-', ':'));
+            return list;
+        }
+
         /// <summary>
         /// 节点的去重指纹：协议 + 地址 + 端口 + 凭据 + 传输关键参数。
         /// 用于导入订阅时剔除重复节点。备注名不参与比较（备注变了不算新节点）。
@@ -99,6 +120,8 @@ namespace ProxyCore
             sb.Append((n.SNI ?? "").Trim().ToLowerInvariant()).Append('|');
             sb.Append((n.PublicKey ?? "").Trim()).Append('|');
             sb.Append((n.Flow ?? "").Trim().ToLowerInvariant());
+            sb.Append((n.Obfs ?? "").Trim().ToLowerInvariant()).Append('|');
+            sb.Append((n.ObfsPassword ?? "").Trim());
             return sb.ToString();
         }
     }

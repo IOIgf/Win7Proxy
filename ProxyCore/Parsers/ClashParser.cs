@@ -130,6 +130,24 @@ namespace ProxyCore.Parsers
                     n.Password = GetStr(m, "password");
                     break;
 
+                case "hysteria2":
+                case "hy2":
+                    n.Type = NodeType.Hysteria2;
+                    n.Password = GetStr(m, "password", "auth", "auth-str");
+                    n.SNI = GetStr(m, "sni", "servername");
+                    n.Fingerprint = GetStr(m, "fingerprint", "client-fingerprint");
+                    n.Alpn = GetListStr(m, "alpn");
+                    n.Obfs = GetStr(m, "obfs");
+                    n.ObfsPassword = GetStr(m, "obfs-password", "obfs-pwd");
+                    n.PinnedCertSha256 = GetStr(m, "pinSHA256", "pin-sha256");
+                    n.UpMbps = ParseMbps(GetStr(m, "up", "up-mbps"));
+                    n.DownMbps = ParseMbps(GetStr(m, "down", "down-mbps"));
+                    var ports = GetStr(m, "ports", "mport");
+                    if (!string.IsNullOrEmpty(ports)) n.Ports = ports;
+                    n.TLS = true;
+                    n.Extra["security"] = "tls";
+                    break;
+
                 case "http":
                 case "https":
                     n.Type = NodeType.Http;
@@ -260,6 +278,21 @@ namespace ProxyCore.Parsers
             int i;
             int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out i);
             return i;
+        }
+
+        /// <summary>带宽字段可能是 "100"、"100 Mbps"、"100Mbps"，取前导数字。</summary>
+        private static int ParseMbps(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return 0;
+            var v = 0;
+            var any = false;
+            foreach (var ch in s.Trim())
+            {
+                if (ch < '0' || ch > '9') break;
+                v = v * 10 + (ch - '0');
+                any = true;
+            }
+            return any ? v : 0;
         }
     }
 }

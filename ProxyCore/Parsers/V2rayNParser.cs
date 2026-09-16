@@ -39,7 +39,9 @@ namespace ProxyCore.Parsers
             return t.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase) ||
                    t.StartsWith("vless://", StringComparison.OrdinalIgnoreCase) ||
                    t.StartsWith("trojan://", StringComparison.OrdinalIgnoreCase) ||
-                   t.StartsWith("ss://", StringComparison.OrdinalIgnoreCase);
+                   t.StartsWith("ss://", StringComparison.OrdinalIgnoreCase) ||
+                   t.StartsWith("hysteria2://", StringComparison.OrdinalIgnoreCase) ||
+                   t.StartsWith("hy2://", StringComparison.OrdinalIgnoreCase);
         }
 
         public List<Node> Parse(string raw)
@@ -75,6 +77,8 @@ namespace ProxyCore.Parsers
             if (link.StartsWith("vless://", StringComparison.OrdinalIgnoreCase)) return ParseVless(link);
             if (link.StartsWith("trojan://", StringComparison.OrdinalIgnoreCase)) return ParseTrojan(link);
             if (link.StartsWith("ss://", StringComparison.OrdinalIgnoreCase)) return ParseSs(link);
+            if (link.StartsWith("hysteria2://", StringComparison.OrdinalIgnoreCase) ||
+                link.StartsWith("hy2://", StringComparison.OrdinalIgnoreCase)) return ParseHysteria2(link);
             return null;
         }
 
@@ -244,6 +248,58 @@ namespace ProxyCore.Parsers
                 n.Password = userinfo2.Substring(ci + 1);
             }
             ParseHostPort(hp2, n);
+            return n;
+        }
+
+        private static Node ParseHysteria2(string link)
+        {
+            // hysteria2://auth@host:port/?obfs=salamander&obfs-password=..&sni=..&insecure=1#remarks
+            var n = new Node { Type = NodeType.Hysteria2, RawLink = link };
+            var body = link.Substring(link.IndexOf("://", StringComparison.Ordinal) + 3);
+
+            int hash = body.IndexOf('#');
+            if (hash >= 0) { n.Remarks = UriUnescape(body.Substring(hash + 1)); body = body.Substring(0, hash); }
+
+            int qm = body.IndexOf('?');
+            var authority = (qm >= 0 ? body.Substring(0, qm) : body).TrimEnd('/');
+
+            int at = authority.LastIndexOf('@');
+            var hp = authority;
+            if (at >= 0)
+            {
+                n.Password = UriUnescape(authority.Substring(0, at));
+                hp = authority.Substring(at + 1);
+            }
+
+            int colon = hp.LastIndexOf(':');
+            n.Address = (colon >= 0 ? hp.Substring(0, colon) : hp).Trim('[', ']');
+            // 端口部分可能是 "443" 或 "443,20000-30000"（后者为端口跳跃）
+            var portParts = (colon >= 0 ? hp.Substring(colon + 1) : "").Split(',');
+            n.Port = ToInt(portParts.Length > 0 ? portParts[0].Trim() : "");
+            if (portParts.Length > 1)
+                n.Ports = string.Join(",", portParts, 1, portParts.Length - 1).Trim();
+
+            var q = ParseQuery(body);
+            n.SNI = Get(q, "sni", "peer", "servername");
+            n.Host = Get(q, "host");
+            n.Fingerprint = Get(q, "fp", "fingerprint");
+            n.Alpn = UriUnescape(Get(q, "alpn"));
+            n.Obfs = Get(q, "obfs");
+            n.ObfsPassword = Get(q, "obfs-password", "obfs-pwd", "obfsparam");
+            n.PinnedCertSha256 = Get(q, "pinSHA256", "pin-sha256", "pinsha256");
+            n.AllowInsecure = IsTrue(q, "insecure", "allowInsecure", "skip-cert-verify");
+            n.UpMbps = ToInt(Get(q, "up_mbps", "up"));
+            n.DownMbps = ToInt(Get(q, "down_mbps", "down"));
+
+            if (string.IsNullOrEmpty(n.Ports))
+            {
+                var mport = Get(q, "mport", "ports");
+                if (!string.IsNullOrEmpty(mport)) n.Ports = mport;
+            }
+            if (n.Port <= 0) n.Port = 443;
+
+            n.TLS = true; // hysteria2 基于 QUIC，必然 TLS
+            n.Extra["security"] = "tls";
             return n;
         }
 
