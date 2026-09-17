@@ -229,9 +229,6 @@ namespace ProxyCore
             if (alpn.Count == 0) alpn.Add("h3");
             tls["alpn"] = new JArray(alpn.ToArray());
 
-            if (!string.IsNullOrEmpty(n.PinnedCertSha256))
-                tls["certificate_public_key_sha256"] = new JArray(n.PinnedCertSha256.Replace(":", "").Replace(" ", ""));
-
             return tls;
         }
 

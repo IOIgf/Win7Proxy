@@ -38,6 +38,14 @@ namespace ProxyCore
             if (n.Type == NodeType.Hysteria2 && !spec.Hysteria2)
                 list.Add(spec.Name + " 不支持 Hysteria2，内核会拒绝启动（Xray 与 sing-box 支持）。");
 
+            if (n.AllowInsecure && spec.Kind == CoreKind.Xray &&
+                NetUtil.NormalizeCertPin(n.PinnedCertSha256) == "")
+                list.Add("Xray 已移除 allowInsecure（跳过证书校验），将改用严格校验；"
+                    + "自签名服务器请提供 pinSHA256，或改用 sing-box。");
+
+            if (!string.IsNullOrEmpty(n.PinnedCertSha256) && spec.Kind == CoreKind.Singbox)
+                list.Add("sing-box 只支持证书公钥 pin，无法识别 hysteria2 的证书指纹 pinSHA256，该参数将被忽略。");
+
             if (n.Type == NodeType.Vmess && !string.IsNullOrEmpty(n.Security) &&
                 (n.Security == "none" || n.Security == "zero"))
                 list.Add("该 vmess 节点未启用加密（" + n.Security + "），流量特征明显且已被多数内核标记为不推荐。");

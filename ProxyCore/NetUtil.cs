@@ -66,6 +66,23 @@ namespace ProxyCore
             }
         }
 
+        /// <summary>
+        /// 把证书 SHA-256 pin 归一化为无分隔的小写十六进制（Xray 的 pinnedPeerCertSha256 要求）。
+        /// 订阅里可能是 "de:ad:be:ef" 或 "DE AD BE EF"；不是合法 32 字节哈希则返回空串。
+        /// </summary>
+        public static string NormalizeCertPin(string pin)
+        {
+            if (string.IsNullOrWhiteSpace(pin)) return "";
+            var sb = new StringBuilder();
+            foreach (var ch in pin)
+            {
+                if (ch == ':' || ch == ' ' || ch == '-') continue;
+                if (!Uri.IsHexDigit(ch)) return "";
+                sb.Append(char.ToLowerInvariant(ch));
+            }
+            return sb.Length == 64 ? sb.ToString() : "";
+        }
+
         /// <summary>把 alpn 字符串（"h2,http/1.1"）拆成数组。</summary>
         public static List<string> SplitAlpn(string alpn)
         {

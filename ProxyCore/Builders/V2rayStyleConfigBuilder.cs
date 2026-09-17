@@ -204,7 +204,7 @@ namespace ProxyCore
 
         private static JObject BuildStreamSettings(CoreSpec spec, Node n)
         {
-            if (n.Type == NodeType.Hysteria2) return BuildHysteria2Stream(n);
+            if (n.Type == NodeType.Hysteria2) return BuildHysteria2Stream(spec, n);
 
             var ss = new JObject();
             var network = NetUtil.NormalizeNetwork(n.Network);
@@ -277,10 +277,8 @@ namespace ProxyCore
             else if (mode == "tls")
             {
                 ss["security"] = "tls";
-                var tls = new JObject {
-                    ["serverName"] = serverName,
-                    ["allowInsecure"] = n.AllowInsecure
-                };
+                var tls = new JObject { ["serverName"] = serverName };
+                ApplyCertTrust(spec, n, tls);
                 if (!string.IsNullOrEmpty(n.Fingerprint)) tls["fingerprint"] = n.Fingerprint;
 
                 var alpn = NetUtil.SplitAlpn(n.Alpn);
@@ -300,14 +298,12 @@ namespace ProxyCore
         /// Xray 的 Hysteria 2 = hysteria 出站 + hysteria QUIC 传输：认证放在传输层的
         /// hysteriaSettings.auth，混淆与端口跳跃/带宽走 finalmask（salamander / quicParams）。
         /// </summary>
-        private static JObject BuildHysteria2Stream(Node n)
+        private static JObject BuildHysteria2Stream(CoreSpec spec, Node n)
         {
             var serverName = string.IsNullOrEmpty(n.SNI) ? FirstNonEmpty(n.Host, n.Address) : n.SNI;
 
-            var tls = new JObject {
-                ["serverName"] = serverName,
-                ["allowInsecure"] = n.AllowInsecure
-            };
+            var tls = new JObject { ["serverName"] = serverName };
+            ApplyCertTrust(spec, n, tls);
             var alpn = NetUtil.SplitAlpn(n.Alpn);
             if (alpn.Count == 0) alpn.Add("h3");
             tls["alpn"] = new JArray(alpn.ToArray());
@@ -341,6 +337,23 @@ namespace ProxyCore
             if (fm.Count > 0) ss["finalmask"] = fm;
 
             return ss;
+        }
+
+        /// <summary>
+        /// 证书信任设置：Xray 自 26.1.31 起移除了 allowInsecure，只能改用证书 pin；
+        /// V2Ray 仍支持 allowInsecure，保持原样。
+        /// </summary>
+        private static void ApplyCertTrust(CoreSpec spec, Node n, JObject tls)
+        {
+            if (spec.Kind == CoreKind.Xray)
+            {
+                var pin = NetUtil.NormalizeCertPin(n.PinnedCertSha256);
+                if (pin != "") tls["pinnedPeerCertSha256"] = pin;
+            }
+            else
+            {
+                tls["allowInsecure"] = n.AllowInsecure;
+            }
         }
 
         // ---------- 路由 / DNS ----------
