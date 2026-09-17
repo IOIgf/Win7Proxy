@@ -275,7 +275,7 @@ namespace ProxyCore.Tests
                 UpMbps = 100,
                 DownMbps = 200,
                 Ports = "20000-30000",
-                PinnedCertSha256 = "dead:beef"
+                PinnedCertSha256 = "e3:b0:c4:42:98:fc:1c:14:9a:fb:f4:c8:99:6f:b9:24:27:ae:41:e4:64:9b:93:4c:a4:95:99:1b:78:52:b8:55"
             };
         }
 
@@ -313,7 +313,8 @@ namespace ProxyCore.Tests
             Assert.True((bool)ob["tls"]["insecure"]);
             Assert.Equal("example.com", (string)ob["tls"]["server_name"]);
             Assert.Equal("h3", (string)ob["tls"]["alpn"][0]);
-            Assert.Equal("deadbeef", (string)ob["tls"]["certificate_public_key_sha256"][0]);
+            // sing-box 只能 pin 公钥，识别不了 hysteria2 的证书指纹 pin，故不输出该字段
+            Assert.Null(ob["tls"]["certificate_public_key_sha256"]);
             Assert.Null(ob["transport"]);
         }
 
@@ -340,13 +341,58 @@ namespace ProxyCore.Tests
             Assert.Equal("tls", (string)ss["security"]);
             Assert.Equal("pw", (string)ss["hysteriaSettings"]["auth"]);
             Assert.Equal("example.com", (string)ss["tlsSettings"]["serverName"]);
-            Assert.True((bool)ss["tlsSettings"]["allowInsecure"]);
+            // Xray 已移除 allowInsecure，改用证书 pin（归一化为无分隔小写十六进制）
+            Assert.Null(ss["tlsSettings"]["allowInsecure"]);
+            Assert.Equal("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                (string)ss["tlsSettings"]["pinnedPeerCertSha256"]);
             Assert.Equal("h3", (string)ss["tlsSettings"]["alpn"][0]);
 
             Assert.Equal("salamander", (string)ss["finalmask"]["udp"][0]["type"]);
             Assert.Equal("op", (string)ss["finalmask"]["udp"][0]["settings"]["password"]);
             Assert.Equal("20000-30000", (string)ss["finalmask"]["quicParams"]["udpHop"]["ports"]);
             Assert.Equal("100 mbps", (string)ss["finalmask"]["quicParams"]["brutalUp"]);
+        }
+
+        [Fact]
+        public void Xray不再输出已移除的allowInsecure()
+        {
+            var n = new Node
+            {
+                Type = NodeType.Trojan, Address = "1.2.3.4", Port = 443, Password = "pw",
+                TLS = true, SNI = "example.com", AllowInsecure = true
+            };
+            var ss = (JObject)JObject.Parse(CoreConfigFactory.BuildJson(CoreKind.Xray, n, ProxyMode.Global))["outbounds"][0]["streamSettings"];
+            Assert.Null(ss["tlsSettings"]["allowInsecure"]);
+            // V2Ray 未移除该字段，仍照常输出
+            var v2 = (JObject)JObject.Parse(CoreConfigFactory.BuildJson(CoreKind.V2ray, n, ProxyMode.Global))["outbounds"][0]["streamSettings"];
+            Assert.True((bool)v2["tlsSettings"]["allowInsecure"]);
+        }
+
+        [Fact]
+        public void 证书pin归一化()
+        {
+            Assert.Equal("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                NetUtil.NormalizeCertPin("e3:b0:c4:42:98:fc:1c:14:9a:fb:f4:c8:99:6f:b9:24:27:ae:41:e4:64:9b:93:4c:a4:95:99:1b:78:52:b8:55"));
+            Assert.Equal("", NetUtil.NormalizeCertPin("deadbeef"));
+            Assert.Equal("", NetUtil.NormalizeCertPin("not-hex"));
+        }
+
+        [Fact]
+        public void 真实测速配置_只保留HTTP入站并改到指定端口()
+        {
+            var xray = CoreConfigFactory.BuildJson(CoreKind.Xray, H2Node(), ProxyMode.Global);
+            var r = JObject.Parse(RealLatencyTester.RetargetHttpInbound(xray, CoreKind.Xray, 12345));
+            var ins = (JArray)r["inbounds"];
+            Assert.Single(ins);
+            Assert.Equal("http", (string)ins[0]["protocol"]);
+            Assert.Equal(12345, (int)ins[0]["port"]);
+
+            var sing = CoreConfigFactory.BuildJson(CoreKind.Singbox, H2Node(), ProxyMode.Global);
+            var r2 = JObject.Parse(RealLatencyTester.RetargetHttpInbound(sing, CoreKind.Singbox, 23456));
+            var ins2 = (JArray)r2["inbounds"];
+            Assert.Single(ins2);
+            Assert.Equal("http", (string)ins2[0]["type"]);
+            Assert.Equal(23456, (int)ins2[0]["listen_port"]);
         }
     }
 }
