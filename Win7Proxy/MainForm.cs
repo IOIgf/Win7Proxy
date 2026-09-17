@@ -828,10 +828,15 @@ namespace Win7Proxy
             if (targets.Count == 0) return;
 
             var indices = new List<int>();
+            var tcpTargets = new List<Node>();
+            var quicTargets = new List<Node>();
             foreach (var n in targets)
             {
                 int i = _state.Nodes.IndexOf(n);
                 if (i >= 0) indices.Add(i);
+                // Hysteria2 跑在 QUIC/UDP 上，不在节点端口监听 TCP，用 TCP 测只会得到假的“超时”
+                if (n.Type == NodeType.Hysteria2) quicTargets.Add(n);
+                else tcpTargets.Add(n);
             }
             lock (_testingLock) { _testingRows.Clear(); _testingRows.UnionWith(indices); }
             if (_testBtn != null && !_testBtn.IsDisposed) _testBtn.Enabled = false;
@@ -846,7 +851,7 @@ namespace Win7Proxy
 
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                Parallel.ForEach(targets, new ParallelOptions { MaxDegreeOfParallelism = 16 }, n =>
+                Parallel.ForEach(tcpTargets, new ParallelOptions { MaxDegreeOfParallelism = 16 }, n =>
                 {
                     int ms = -1;
                     try
@@ -865,16 +870,21 @@ namespace Win7Proxy
                     }
                     catch { }
                     n.LatencyMs = ms;
-                    int idx = _state.Nodes.IndexOf(n);
-                    if (!_grid.IsDisposed && _grid.IsHandleCreated && idx >= 0 && idx < _grid.Rows.Count)
-                    {
-                        _grid.Invoke((Action)(() =>
-                        {
-                            _grid.Rows[idx].Cells["latency"].Value = ms < 0 ? "超时" : ms + " ms";
-                        }));
-                    }
-                    lock (_testingLock) _testingRows.Remove(idx);
+                    SetLatencyCell(_state.Nodes.IndexOf(n), ms < 0 ? "超时" : ms + " ms");
+                    lock (_testingLock) _testingRows.Remove(_state.Nodes.IndexOf(n));
                 });
+
+                // QUIC 类节点：顺序做真实延迟测试（每个都要临时拉起一个内核，不能并发）
+                foreach (var n in quicTargets)
+                {
+                    int idx = _state.Nodes.IndexOf(n);
+                    AppendLog("真实延迟测试：" + n.Remarks + "（Hysteria2/QUIC）...");
+                    var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
+                    int ms = RealLatencyTester.Test(_state.Core, n, coreDir, 8000, s => AppendLog("  " + s));
+                    n.LatencyMs = ms;
+                    SetLatencyCell(idx, ms < 0 ? "失败" : ms + " ms");
+                    lock (_testingLock) _testingRows.Remove(idx);
+                }
 
                 if (!_grid.IsDisposed)
                 {
@@ -889,6 +899,19 @@ namespace Win7Proxy
                 _state.Save();
                 AppendLog("延迟测试完成。");
             });
+        }
+
+        private void SetLatencyCell(int idx, string text)
+        {
+            if (idx < 0 || _grid.IsDisposed || !_grid.IsHandleCreated) return;
+            try
+            {
+                _grid.Invoke((Action)(() =>
+                {
+                    if (idx >= 0 && idx < _grid.Rows.Count) _grid.Rows[idx].Cells["latency"].Value = text;
+                }));
+            }
+            catch { }
         }
 
         private void DeleteSelected()
