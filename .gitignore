@@ -20,6 +20,7 @@ core/
 # Agent / tooling state
 .omo/
 .build/
+.tmp/
 .dotnet/
 .workbuddy/
 
