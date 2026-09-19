@@ -30,6 +30,12 @@ namespace Win7Proxy
         /// <summary>导入订阅时自动去除重复节点。</summary>
         public bool DedupeOnImport { get; set; } = true;
 
+        /// <summary>本地 mixed 端口（HTTP 与 SOCKS 共用）。</summary>
+        public int MixedPort { get; set; } = CoreConstants.MixedPort;
+
+        /// <summary>允许局域网内其他设备使用本机代理（入站监听 0.0.0.0）。</summary>
+        public bool AllowLan { get; set; } = false;
+
         [JsonIgnore]
         public string LoadWarning { get; private set; } = "";
 
@@ -138,6 +144,7 @@ namespace Win7Proxy
         {
             if (state.Subscriptions == null) state.Subscriptions = new List<Subscription>();
             if (state.Nodes == null) state.Nodes = new List<Node>();
+            if (state.MixedPort < 1 || state.MixedPort > 65535) state.MixedPort = CoreConstants.MixedPort;
             // 旧版本保存的订阅没有 Id，补上，否则"重新导入替换"无从匹配。
             foreach (var sub in state.Subscriptions)
                 if (string.IsNullOrEmpty(sub.Id)) sub.Id = Guid.NewGuid().ToString("N");

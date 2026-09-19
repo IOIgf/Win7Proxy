@@ -9,14 +9,14 @@ namespace ProxyCore
     /// </summary>
     public static class V2rayConfigBuilder
     {
-        public static XrayConfig Build(Node node, ProxyMode mode)
+        public static XrayConfig Build(Node node, ProxyMode mode, InboundOptions inbound = null)
         {
-            return V2rayStyleConfigBuilder.Build(CoreRegistry.V2ray, node, mode);
+            return V2rayStyleConfigBuilder.Build(CoreRegistry.V2ray, node, mode, inbound);
         }
 
-        public static string BuildJson(Node node, ProxyMode mode)
+        public static string BuildJson(Node node, ProxyMode mode, InboundOptions inbound = null)
         {
-            return Build(node, mode).ToJson();
+            return Build(node, mode, inbound).ToJson();
         }
     }
 }

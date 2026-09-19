@@ -8,7 +8,7 @@ namespace Win7Proxy
         private readonly TextBox _box;
         public string Value => _box.Text;
 
-        public InputDialog(string title, string prompt)
+        public InputDialog(string title, string prompt, string defaultValue = null)
         {
             HiDpi.ApplyTo(this);   // 必须在设置 Size / 创建控件之前
 
@@ -19,7 +19,7 @@ namespace Win7Proxy
             MaximizeBox = false; MinimizeBox = false;
 
             var lbl = new Label { Left = 12, Top = 14, Width = 480, Text = prompt };
-            _box = new TextBox { Left = 12, Top = 40, Width = 480 };
+            _box = new TextBox { Left = 12, Top = 40, Width = 480, Text = defaultValue ?? "" };
             var ok = new Button { Text = "确定", Left = 320, Top = 86, DialogResult = DialogResult.OK };
             var cancel = new Button { Text = "取消", Left = 410, Top = 86, DialogResult = DialogResult.Cancel };
 

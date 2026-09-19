@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using Xunit;
 using ProxyCore;
@@ -41,17 +40,40 @@ namespace ProxyCore.Tests
 
             var root = JObject.Parse(cfg);
             var inbounds = (JArray)root["inbounds"];
-            var ports = new HashSet<int>();
-            foreach (var ib in inbounds) ports.Add((int)ib["port"]);
-            Assert.Contains(CoreConstants.SocksPort, ports);
-            Assert.Contains(CoreConstants.HttpPort, ports);
+            Assert.Single(inbounds);
+            Assert.Equal("socks", (string)inbounds[0]["protocol"]);
+            Assert.Equal(CoreConstants.MixedPort, (int)inbounds[0]["port"]);
+            Assert.Equal("127.0.0.1", (string)inbounds[0]["listen"]);
+        }
+
+        [Fact]
+        public void 入站选项_自定义端口与局域网监听()
+        {
+            var lan = new InboundOptions { MixedPort = 7890, AllowLan = true };
+            var xray = (JObject)JObject.Parse(CoreConfigFactory.BuildJson(CoreKind.Xray, RealityNode(), ProxyMode.Global, null, lan))["inbounds"][0];
+            Assert.Equal(7890, (int)xray["port"]);
+            Assert.Equal("0.0.0.0", (string)xray["listen"]);
+
+            var sing = (JObject)JObject.Parse(CoreConfigFactory.BuildJson(CoreKind.Singbox, RealityNode(), ProxyMode.Global, null, lan))["inbounds"][0];
+            Assert.Equal("mixed", (string)sing["type"]);
+            Assert.Equal(7890, (int)sing["listen_port"]);
+            Assert.Equal("0.0.0.0", (string)sing["listen"]);
+        }
+
+        [Fact]
+        public void 订阅名_从URL推断主机名()
+        {
+            Assert.Equal("sub.example.com",
+                SubscriptionFetcher.NameFromUrl("https://sub.example.com/api/v1/client/subscribe?token=abc"));
+            Assert.Equal("", SubscriptionFetcher.NameFromUrl("not a url"));
+            Assert.Equal("", SubscriptionFetcher.NameFromUrl(""));
         }
 
         [Fact]
         public void PacGlobal()
         {
             var pac = PacGenerator.Build(ProxyMode.Global, CoreConstants.PacPort, null);
-            Assert.Contains("PROXY 127.0.0.1:" + CoreConstants.HttpPort, pac);
+            Assert.Contains("PROXY 127.0.0.1:" + CoreConstants.MixedPort, pac);
             Assert.Contains("FindProxyForURL", pac);
         }
 
@@ -67,7 +89,7 @@ namespace ProxyCore.Tests
         {
             var pac = PacGenerator.Build(ProxyMode.Rule, CoreConstants.PacPort, null);
             Assert.Contains("DIRECT", pac);
-            Assert.Contains("PROXY 127.0.0.1:" + CoreConstants.HttpPort, pac);
+            Assert.Contains("PROXY 127.0.0.1:" + CoreConstants.MixedPort, pac);
             Assert.Contains("FindProxyForURL", pac);
         }
     }

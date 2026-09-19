@@ -4,8 +4,6 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using ProxyCore.Models;
 
 namespace ProxyCore
@@ -51,9 +49,10 @@ namespace ProxyCore
 
             try
             {
-                // Global 模式：不依赖 geo 数据，且所有流量都走被测节点
-                var json = CoreConfigFactory.BuildJson(kind, node, ProxyMode.Global, coreDir);
-                File.WriteAllText(cfgPath, RetargetHttpInbound(json, kind, port));
+                // Global 模式：不依赖 geo 数据，且所有流量都走被测节点。
+                var json = CoreConfigFactory.BuildJson(kind, node, ProxyMode.Global, coreDir,
+                    new InboundOptions { MixedPort = port });
+                File.WriteAllText(cfgPath, json);
 
                 using (var core = new CoreProcess())
                 {
@@ -110,36 +109,6 @@ namespace ProxyCore
                 log("请求未成功：" + ex.Message);
                 return -1;
             }
-        }
-
-        /// <summary>
-        /// 真实测速只需要一个 HTTP 入站；顺便把它改到临时空闲端口，
-        /// 避免与正在运行的主代理（10808/10809）冲突。
-        /// </summary>
-        public static string RetargetHttpInbound(string json, CoreKind kind, int port)
-        {
-            var root = JObject.Parse(json);
-            var inbounds = root["inbounds"] as JArray;
-            if (inbounds == null) throw new ProxyCoreException("内核配置里没有入站。");
-
-            var keep = new JArray();
-            foreach (var token in inbounds)
-            {
-                var o = token as JObject;
-                if (o == null) continue;
-                var isHttp = kind == CoreKind.Singbox
-                    ? string.Equals((string)o["type"], "http", StringComparison.OrdinalIgnoreCase)
-                    : string.Equals((string)o["protocol"], "http", StringComparison.OrdinalIgnoreCase);
-                if (!isHttp) continue;
-
-                if (kind == CoreKind.Singbox) o["listen_port"] = port;
-                else o["port"] = port;
-                keep.Add(o);
-            }
-
-            if (keep.Count == 0) throw new ProxyCoreException("内核配置里没有 HTTP 入站，无法做真实延迟测试。");
-            root["inbounds"] = keep;
-            return root.ToString(Formatting.Indented);
         }
 
         private static int FreeTcpPort()

@@ -16,9 +16,10 @@ namespace ProxyCore
     {
         private const int HopIntervalSeconds = 30;
 
-        public static XrayConfig Build(CoreSpec spec, Node node, ProxyMode mode)
+        public static XrayConfig Build(CoreSpec spec, Node node, ProxyMode mode, InboundOptions inbound)
         {
             if (node == null) throw new ProxyCoreException("节点为空，无法生成配置。");
+            inbound = inbound ?? InboundOptions.Default;
 
             var cfg = new XrayConfig
             {
@@ -27,7 +28,7 @@ namespace ProxyCore
                     ["access"] = "access.log",
                     ["error"] = "error.log"
                 },
-                Inbounds = new JArray { SocksInbound(spec), HttpInbound(spec) },
+                Inbounds = new JArray { MixedInbound(spec, inbound) },
                 Outbounds = new JArray
                 {
                     BuildProxyOutbound(spec, node),
@@ -57,25 +58,16 @@ namespace ProxyCore
             };
         }
 
-        private static JObject SocksInbound(CoreSpec spec)
+        // 单个 mixed 入站：Xray/V2Ray 的 socks 入站会自动把非 SOCKS 流量按 HTTP 解析，
+        // 因此同一端口可同时服务 SOCKS 与 HTTP（等价 Clash 的 mixed-port）。
+        private static JObject MixedInbound(CoreSpec spec, InboundOptions inbound)
         {
             return new JObject {
-                ["tag"] = "socks",
-                ["port"] = CoreConstants.SocksPort,
-                ["listen"] = "127.0.0.1",
+                ["tag"] = "mixed",
+                ["port"] = inbound.MixedPort,
+                ["listen"] = inbound.ListenAddress,
                 ["protocol"] = "socks",
                 ["settings"] = new JObject { ["udp"] = true, ["auth"] = "noauth" },
-                ["sniffing"] = Sniffing(spec)
-            };
-        }
-
-        private static JObject HttpInbound(CoreSpec spec)
-        {
-            return new JObject {
-                ["tag"] = "http",
-                ["port"] = CoreConstants.HttpPort,
-                ["listen"] = "127.0.0.1",
-                ["protocol"] = "http",
                 ["sniffing"] = Sniffing(spec)
             };
         }

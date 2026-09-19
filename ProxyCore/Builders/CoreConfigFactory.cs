@@ -10,7 +10,7 @@ namespace ProxyCore
         /// 生成配置 JSON。sing-box 需要知道 geo 数据是否已就位，
         /// 缺文件时自动降级为不含地理规则的配置（而不是生成必然失败的配置）。
         /// </summary>
-        public static string BuildJson(CoreKind kind, Node node, ProxyMode mode, string coreDir = null)
+        public static string BuildJson(CoreKind kind, Node node, ProxyMode mode, string coreDir = null, InboundOptions inbound = null)
         {
             var spec = CoreRegistry.Of(kind);
             if (mode == ProxyMode.Rule && spec.NeedsGeoDat && !string.IsNullOrEmpty(coreDir) && !HasV2rayGeo(coreDir))
@@ -19,13 +19,13 @@ namespace ProxyCore
             switch (kind)
             {
                 case CoreKind.V2ray:
-                    return V2rayConfigBuilder.BuildJson(node, mode);
+                    return V2rayConfigBuilder.BuildJson(node, mode, inbound);
 
                 case CoreKind.Singbox:
-                    return SingboxConfigBuilder.BuildJson(node, mode, HasSingboxGeo(coreDir));
+                    return SingboxConfigBuilder.BuildJson(node, mode, HasSingboxGeo(coreDir), inbound);
 
                 default:
-                    return XrayConfigBuilder.BuildJson(node, mode);
+                    return XrayConfigBuilder.BuildJson(node, mode, inbound);
             }
         }
 

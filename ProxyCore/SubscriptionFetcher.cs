@@ -1,5 +1,6 @@
 using System;
 using System.Net;
+using System.Text;
 using ProxyCore.Models;
 using ProxyCore.Parsers;
 
@@ -23,6 +24,17 @@ namespace ProxyCore
         /// <summary>下载订阅原始文本。allowInsecure=true 时对本次请求跳过证书校验。</summary>
         public static string FetchRaw(string url, bool allowInsecure = false)
         {
+            return Download(url, allowInsecure).Raw;
+        }
+
+        private sealed class DownloadResult
+        {
+            public string Raw;
+            public string SuggestedName;
+        }
+
+        private static DownloadResult Download(string url, bool allowInsecure)
+        {
             if (string.IsNullOrWhiteSpace(url))
                 throw new ProxyCoreException("订阅地址为空。");
 
@@ -34,8 +46,9 @@ namespace ProxyCore
             {
                 using (var wc = new TimeoutWebClient(30000, allowInsecure))
                 {
-                    wc.Headers["User-Agent"] = "Win7Proxy/1.3";
-                    return wc.DownloadString(url);
+                    wc.Headers["User-Agent"] = "Win7Proxy/1.4";
+                    var raw = wc.DownloadString(url);
+                    return new DownloadResult { Raw = raw, SuggestedName = SuggestName(wc.ResponseHeaders, url) };
                 }
             }
             catch (Exception ex)
@@ -47,16 +60,79 @@ namespace ProxyCore
             }
         }
 
-        /// <summary>下载并解析订阅，写回 Subscription.Nodes。</summary>
+        /// <summary>下载并解析订阅，写回 Subscription.Nodes；订阅名为空时用响应头/URL 推断。</summary>
         public static Subscription Fetch(Subscription sub)
         {
-            var raw = FetchRaw(sub.Url, sub.AllowInsecureTls);
-            var nodes = SubscriptionParserFactory.Parse(sub, raw);
+            var result = Download(sub.Url, sub.AllowInsecureTls);
+            if (string.IsNullOrWhiteSpace(sub.Name))
+                sub.Name = string.IsNullOrWhiteSpace(result.SuggestedName) ? "订阅" : result.SuggestedName;
+            var nodes = SubscriptionParserFactory.Parse(sub, result.Raw);
             if (nodes == null || nodes.Count == 0)
                 throw new ProxyCoreException("订阅内容里没有解析出任何节点，请检查订阅地址或格式。");
             sub.Nodes = nodes;
             sub.Updated = DateTime.Now;
             return sub;
+        }
+
+        // 订阅站点常用 profile-title（Clash 系，可能带 base64: 前缀）与
+        // Content-Disposition 文件名来标注机场名，取不到再退回 URL 主机名。
+        private static string SuggestName(WebHeaderCollection headers, string url)
+        {
+            try
+            {
+                if (headers != null)
+                {
+                    var title = DecodeProfileTitle(headers["profile-title"]);
+                    if (!string.IsNullOrWhiteSpace(title)) return title.Trim();
+
+                    var filename = ExtractFilename(headers["Content-Disposition"]);
+                    if (!string.IsNullOrWhiteSpace(filename)) return filename.Trim();
+                }
+            }
+            catch { }
+            return NameFromUrl(url);
+        }
+
+        private static string DecodeProfileTitle(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "";
+            value = value.Trim();
+            if (value.StartsWith("base64:", StringComparison.OrdinalIgnoreCase))
+            {
+                try { return Encoding.UTF8.GetString(Convert.FromBase64String(value.Substring("base64:".Length).Trim())); }
+                catch { return ""; }
+            }
+            return value;
+        }
+
+        private static string ExtractFilename(string disposition)
+        {
+            if (string.IsNullOrWhiteSpace(disposition)) return "";
+            foreach (var raw in disposition.Split(';'))
+            {
+                var part = raw.Trim();
+                if (part.StartsWith("filename*=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var v = part.Substring("filename*=".Length).Trim().Trim('"');
+                    var idx = v.IndexOf("''", StringComparison.Ordinal);
+                    if (idx >= 0) v = v.Substring(idx + 2);
+                    try { return Uri.UnescapeDataString(v); } catch { return v; }
+                }
+                if (part.StartsWith("filename=", StringComparison.OrdinalIgnoreCase))
+                    return part.Substring("filename=".Length).Trim().Trim('"');
+            }
+            return "";
+        }
+
+        public static string NameFromUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return "";
+            try
+            {
+                var host = new Uri(url).Host;
+                return string.IsNullOrWhiteSpace(host) ? "" : host;
+            }
+            catch { return ""; }
         }
 
         // WebClient 在 net461 下没有 Timeout 属性，通过重写 GetWebRequest 实现超时控制

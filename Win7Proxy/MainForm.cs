@@ -44,9 +44,15 @@ namespace Win7Proxy
         private System.Windows.Forms.Timer _spinTimer;
         private int _spinFrame;
         private ComboBox _subFilter;
+        private Button _lanBtn;
         private string _filterSubscriptionId;   // null=全部, ""=手动, 其它=订阅 Id
         private bool _suppressFilterEvent;
         private List<Node> _view = new List<Node>();
+        private readonly List<int> _rowToViewIndex = new List<int>();   // 表格行 → _view 下标；-1=分组标题行
+        private readonly List<string> _rowGroups = new List<string>();  // 每行所属分组 Id
+        private readonly List<string> _rowHeaders = new List<string>(); // 标题行文本；节点行为空
+        private readonly HashSet<string> _collapsedGroups = new HashSet<string>(StringComparer.Ordinal);
+        private Font _groupRowFont;
 
         private sealed class GroupItem
         {
@@ -204,6 +210,9 @@ namespace Win7Proxy
                 RefreshGrid();
             };
             _toolPanel.Controls.Add(_subFilter);
+
+            _lanBtn = Btn("局域网:" + (_state.AllowLan ? "开" : "关"), (s, e) => ToggleLan());
+            Btn("端口...", (s, e) => ChangePort());
             _spinTimer = new System.Windows.Forms.Timer { Interval = 120 };
             _spinTimer.Tick += (s, e) =>
             {
@@ -268,17 +277,20 @@ namespace Win7Proxy
                 c.SortMode = DataGridViewColumnSortMode.Programmatic;
             _grid.SelectionChanged += (s, e) =>
             {
-                if (_grid.CurrentRow != null && _grid.CurrentRow.Index >= 0 && _grid.CurrentRow.Index < _view.Count)
+                var n = NodeAtRow(_grid.CurrentRow == null ? -1 : _grid.CurrentRow.Index);
+                if (n != null)
                 {
-                    _state.SelectedIndex = _state.Nodes.IndexOf(_view[_grid.CurrentRow.Index]);
+                    _state.SelectedIndex = _state.Nodes.IndexOf(n);
                     _state.Save();
                 }
                 UpdateNodeLabel();
             };
             _grid.ColumnHeaderMouseClick += (s, e) => SortByColumn(e.ColumnIndex);
+            _grid.CellClick += (s, e) => ToggleGroupCollapse(e.RowIndex);
             _grid.CellDoubleClick += (s, e) =>
             {
-                if (e.RowIndex >= 0 && e.RowIndex < _view.Count)
+                var n = NodeAtRow(e.RowIndex);
+                if (n != null)
                 {
                     _grid.CurrentCell = _grid.Rows[e.RowIndex].Cells[0];
                     StartProxy(false);
@@ -355,7 +367,7 @@ namespace Win7Proxy
             RefreshGrid();
             if (_state.SelectedIndex >= 0 && _state.SelectedIndex < _state.Nodes.Count)
             {
-                int row = _view.IndexOf(_state.Nodes[_state.SelectedIndex]);
+                int row = RowOfNode(_state.Nodes[_state.SelectedIndex]);
                 if (row >= 0) try { _grid.Rows[row].Selected = true; } catch { }
             }
             UpdateNodeLabel();
@@ -372,10 +384,12 @@ namespace Win7Proxy
                 AppendLog(_state.LoadWarning);
 
             // 上次异常退出可能留下一个没人管的 xray，先按 PID 文件回收掉
+            SystemProxy.MixedPort = _state.MixedPort;
             var killed = CoreProcess.KillOrphan(PidFilePath());
             if (killed > 0) AppendLog("已清理上次残留的内核进程。");
             if (SystemProxy.Restore())
                 AppendLog("已恢复上次异常退出前的系统代理设置。");
+            UpdateLanButton();
 
             ProbeCoreVersionAsync();
 
@@ -477,9 +491,28 @@ namespace Win7Proxy
 
         private Node SelectedNode()
         {
-            if (_grid.CurrentRow == null) return null;
-            var i = _grid.CurrentRow.Index;
-            return (i >= 0 && i < _view.Count) ? _view[i] : null;
+            return NodeAtRow(_grid.CurrentRow == null ? -1 : _grid.CurrentRow.Index);
+        }
+
+        private Node NodeAtRow(int row)
+        {
+            if (row < 0 || row >= _rowToViewIndex.Count) return null;
+            int vi = _rowToViewIndex[row];
+            return vi < 0 ? null : _view[vi];
+        }
+
+        private bool IsHeaderRow(int row)
+        {
+            return row >= 0 && row < _rowToViewIndex.Count && _rowToViewIndex[row] < 0;
+        }
+
+        private int RowOfNode(Node n)
+        {
+            int vi = _view.IndexOf(n);
+            if (vi < 0) return -1;
+            for (int i = 0; i < _rowToViewIndex.Count; i++)
+                if (_rowToViewIndex[i] == vi) return i;
+            return -1;
         }
 
         private void UpdateNodeLabel()
@@ -498,32 +531,44 @@ namespace Win7Proxy
             // 记录当前视图状态（按节点引用保存，排序/刷新后仍能对应到正确的行）
             int first = _grid.FirstDisplayedScrollingRowIndex;
             var selNodes = SelectedNodes();
-            var curNode = (_grid.CurrentRow != null && _grid.CurrentRow.Index < _view.Count)
-                ? _view[_grid.CurrentRow.Index] : null;
+            var curNode = NodeAtRow(_grid.CurrentRow == null ? -1 : _grid.CurrentRow.Index);
 
-            _view = BuildView();
+            RebuildRows();
 
             _grid.Rows.Clear();
-            foreach (var n in _view)
+            for (int i = 0; i < _rowToViewIndex.Count; i++)
             {
-                _grid.Rows.Add(
-                    n.Remarks,
-                    n.Type.ToString(),
-                    n.Address + ":" + n.Port,
-                    n.LatencyMs < 0 ? "-" : n.LatencyMs + " ms",
-                    n.SourceName);
+                if (_rowToViewIndex[i] < 0)
+                {
+                    _grid.Rows.Add(_rowHeaders[i], "", "", "", "");
+                    var row = _grid.Rows[i];
+                    if (_groupRowFont == null) _groupRowFont = new Font(_grid.Font, FontStyle.Bold);
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(232, 238, 246);
+                    row.DefaultCellStyle.ForeColor = Color.FromArgb(45, 90, 150);
+                    row.DefaultCellStyle.Font = _groupRowFont;
+                }
+                else
+                {
+                    var n = _view[_rowToViewIndex[i]];
+                    _grid.Rows.Add(
+                        n.Remarks,
+                        n.Type.ToString(),
+                        n.Address + ":" + n.Port,
+                        n.LatencyMs < 0 ? "-" : n.LatencyMs + " ms",
+                        n.SourceName);
+                }
             }
 
             // 恢复选中与当前行（按节点引用匹配新位置）
             int? focusIdx = null;
             foreach (var n in selNodes)
             {
-                int idx = _view.IndexOf(n);
+                int idx = RowOfNode(n);
                 if (idx >= 0) { _grid.Rows[idx].Selected = true; if (!focusIdx.HasValue) focusIdx = idx; }
             }
             if (curNode != null)
             {
-                int idx = _view.IndexOf(curNode);
+                int idx = RowOfNode(curNode);
                 if (idx >= 0) { _grid.CurrentCell = _grid.Rows[idx].Cells[0]; focusIdx = idx; }
             }
             // 恢复滚动位置：优先让焦点行可见，否则回到原先的顶部行
@@ -532,19 +577,72 @@ namespace Win7Proxy
                 _grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollTo, _grid.Rows.Count - 1);
         }
 
-        private List<Node> BuildView()
+        // 按订阅把节点分行：每个分组先放一行标题，再放它的节点；折叠的分组只留标题。
+        private void RebuildRows()
         {
-            var list = new List<Node>();
-            foreach (var n in _state.Nodes)
-                if (MatchesFilter(n)) list.Add(n);
-            return list;
+            _view.Clear();
+            _rowToViewIndex.Clear();
+            _rowGroups.Clear();
+            _rowHeaders.Clear();
+
+            var order = new List<string>();
+            if (_filterSubscriptionId == null)
+            {
+                foreach (var s in _state.Subscriptions) order.Add(s.Id);
+                order.Add("");
+                foreach (var n in _state.Nodes)
+                {
+                    var gid = GroupIdOf(n);
+                    if (gid != "" && !order.Contains(gid)) order.Add(gid);
+                }
+            }
+            else
+            {
+                order.Add(_filterSubscriptionId);
+            }
+
+            foreach (var gid in order)
+            {
+                var nodes = new List<Node>();
+                foreach (var n in _state.Nodes)
+                    if (GroupIdOf(n) == gid) nodes.Add(n);
+                if (nodes.Count == 0) continue;
+
+                bool collapsed = _collapsedGroups.Contains(gid);
+                _rowToViewIndex.Add(-1);
+                _rowGroups.Add(gid);
+                _rowHeaders.Add((collapsed ? "▸ " : "▾ ") + GroupTitle(gid) + "（" + nodes.Count + "）");
+                if (collapsed) continue;
+
+                foreach (var n in nodes)
+                {
+                    _rowToViewIndex.Add(_view.Count);
+                    _rowGroups.Add(gid);
+                    _rowHeaders.Add("");
+                    _view.Add(n);
+                }
+            }
         }
 
-        private bool MatchesFilter(Node n)
+        private static string GroupIdOf(Node n)
         {
-            if (_filterSubscriptionId == null) return true;
-            if (_filterSubscriptionId == "") return string.IsNullOrEmpty(n.SubscriptionId);
-            return n.SubscriptionId == _filterSubscriptionId;
+            return string.IsNullOrEmpty(n.SubscriptionId) ? "" : n.SubscriptionId;
+        }
+
+        private string GroupTitle(string gid)
+        {
+            if (gid == "") return "手动";
+            var sub = _state.FindSubscription(gid);
+            if (sub == null) return "(未知订阅)";
+            return string.IsNullOrEmpty(sub.Name) ? "(未命名)" : sub.Name;
+        }
+
+        private void ToggleGroupCollapse(int row)
+        {
+            if (!IsHeaderRow(row)) return;
+            var gid = _rowGroups[row];
+            if (!_collapsedGroups.Remove(gid)) _collapsedGroups.Add(gid);
+            RefreshGrid();
         }
 
         // 重建「订阅」下拉：全部 + 每个订阅 + 手动；订阅被删/改名后自动跟上，
@@ -899,8 +997,8 @@ namespace Win7Proxy
             var list = new List<Node>();
             foreach (DataGridViewRow row in _grid.SelectedRows)
             {
-                var i = row.Index;
-                if (i >= 0 && i < _view.Count) list.Add(_view[i]);
+                var n = NodeAtRow(row.Index);
+                if (n != null) list.Add(n);
             }
             return list;
         }
@@ -917,7 +1015,7 @@ namespace Win7Proxy
             var quicTargets = new List<Node>();
             foreach (var n in targets)
             {
-                int i = _view.IndexOf(n);
+                int i = RowOfNode(n);
                 if (i >= 0) indices.Add(i);
                 // Hysteria2 跑在 QUIC/UDP 上，不在节点端口监听 TCP，用 TCP 测只会得到假的“超时”
                 if (n.Type == NodeType.Hysteria2) quicTargets.Add(n);
@@ -955,14 +1053,14 @@ namespace Win7Proxy
                     }
                     catch { }
                     n.LatencyMs = ms;
-                    SetLatencyCell(_view.IndexOf(n), ms < 0 ? "超时" : ms + " ms");
-                    lock (_testingLock) _testingRows.Remove(_view.IndexOf(n));
+                    SetLatencyCell(RowOfNode(n), ms < 0 ? "超时" : ms + " ms");
+                    lock (_testingLock) _testingRows.Remove(RowOfNode(n));
                 });
 
                 // QUIC 类节点：顺序做真实延迟测试（每个都要临时拉起一个内核，不能并发）
                 foreach (var n in quicTargets)
                 {
-                    int idx = _view.IndexOf(n);
+                    int idx = RowOfNode(n);
                     AppendLog("真实延迟测试：" + n.Remarks + "（Hysteria2/QUIC）...");
                     var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
                     int ms = RealLatencyTester.Test(_state.Core, n, coreDir, 8000, s => AppendLog("  " + s));
@@ -1014,6 +1112,66 @@ namespace Win7Proxy
             _state.Save();
             RefreshGrid();
             AppendLog("已删除 " + nodes.Count + " 个节点。");
+        }
+
+        // ---------- 网络设置（mixed 端口 / 局域网） ----------
+
+        private void UpdateLanButton()
+        {
+            if (_lanBtn == null || _lanBtn.IsDisposed) return;
+            _lanBtn.Text = "局域网:" + (_state.AllowLan ? "开" : "关");
+            _lanBtn.BackColor = _state.AllowLan ? Color.FromArgb(230, 160, 40) : Color.White;
+            _lanBtn.ForeColor = _state.AllowLan ? Color.White : Color.FromArgb(40, 44, 52);
+        }
+
+        private void ToggleLan()
+        {
+            if (!_state.AllowLan &&
+                MessageBox.Show("开启后，同一局域网内的其他设备可直接使用本机代理（无认证）。\n" +
+                                "请确认当前网络可信，否则可能被他人盗用。确定开启？",
+                    "允许局域网连接", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
+
+            _state.AllowLan = !_state.AllowLan;
+            _state.Save();
+            UpdateLanButton();
+            AppendLog("局域网访问：" + (_state.AllowLan ? "已开启（入站监听 0.0.0.0）" : "已关闭（仅本机可访问）"));
+            ApplyNetworkChange();
+        }
+
+        private void ChangePort()
+        {
+            using (var dlg = new InputDialog("本地 mixed 端口",
+                "输入 1-65535 的端口号（HTTP 与 SOCKS 共用同一端口）：", _state.MixedPort.ToString()))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                int port;
+                if (!int.TryParse(dlg.Value.Trim(), out port) || port < 1 || port > 65535)
+                {
+                    MessageBox.Show("端口必须是 1-65535 之间的整数。", "无效端口", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                if (port == _state.MixedPort) return;
+
+                _state.MixedPort = port;
+                SystemProxy.MixedPort = port;
+                _state.Save();
+                AppendLog("本地 mixed 端口已改为 " + port + "。");
+                ApplyNetworkChange();
+            }
+        }
+
+        private void ApplyNetworkChange()
+        {
+            if (_core != null && _currentNode != null)
+            {
+                AppendLog("网络设置已更改，正在重启内核以生效...");
+                StartProxy(true);
+            }
+            else
+            {
+                UpdateStatus();
+            }
         }
 
         // ---------- 内核控制 ----------
@@ -1088,7 +1246,8 @@ namespace Win7Proxy
             {
                 Directory.CreateDirectory(coreDir);
                 var cfgPath = Path.Combine(coreDir, CoreConstants.ConfigFile);
-                File.WriteAllText(cfgPath, CoreConfigFactory.BuildJson(spec.Kind, node, _state.Mode, coreDir));
+                var inbound = new InboundOptions { MixedPort = _state.MixedPort, AllowLan = _state.AllowLan };
+                File.WriteAllText(cfgPath, CoreConfigFactory.BuildJson(spec.Kind, node, _state.Mode, coreDir, inbound));
 
                 // 已知的内核不兼容（比如 h2 传输在新版 xray 里已被移除）提前说清楚，
                 // 否则用户只会看到"内核启动失败"四个字，无从下手
@@ -1101,12 +1260,11 @@ namespace Win7Proxy
 
                 StopCoreOnly();
 
-                // 两个入站端口任一被占用都不能继续。只发警告会把其他程序的监听端口
+                // mixed 端口被占用就不能继续。只发警告会把其他程序的监听端口
                 // 误判成当前内核启动成功，随后错误接管系统代理。
-                if (CoreProcess.IsPortListening(CoreConstants.SocksPort, 300) ||
-                    CoreProcess.IsPortListening(CoreConstants.HttpPort, 300))
-                    throw new ProxyCoreException("本地端口 " + CoreConstants.SocksPort + " 或 " +
-                        CoreConstants.HttpPort + " 已被其他程序占用，请先退出冲突的代理软件。");
+                if (CoreProcess.IsPortListening(_state.MixedPort, 300))
+                    throw new ProxyCoreException("本地端口 " + _state.MixedPort +
+                        " 已被其他程序占用，请先退出冲突的代理软件，或在工具栏「端口」里改一个端口。");
 
                 var core = new CoreProcess();
                 core.LogReceived += s => AppendLog(s);
@@ -1118,8 +1276,7 @@ namespace Win7Proxy
                 for (int i = 0; i < 25; i++)
                 {
                     if (!core.IsRunning) break;
-                    if (CoreProcess.IsPortListening(CoreConstants.SocksPort, 150) &&
-                        CoreProcess.IsPortListening(CoreConstants.HttpPort, 150))
+                    if (CoreProcess.IsPortListening(_state.MixedPort, 150))
                     {
                         up = true;
                         break;
@@ -1146,6 +1303,7 @@ namespace Win7Proxy
                 {
                     if (!ReferenceEquals(core, _core) || !core.IsRunning)
                         throw new ProxyCoreException("内核在启动完成前已经退出，请查看内核日志。");
+                    SystemProxy.MixedPort = _state.MixedPort;
                     SystemProxy.SetProxy(_state.Mode);
                     _currentNode = node;
                 }

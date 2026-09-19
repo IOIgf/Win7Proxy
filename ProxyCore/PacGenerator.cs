@@ -29,11 +29,11 @@ namespace ProxyCore
                 return Wrap("DIRECT");
 
             if (mode == ProxyMode.Global)
-                return Wrap($"PROXY 127.0.0.1:{CoreConstants.HttpPort}");
+                return Wrap($"PROXY 127.0.0.1:{CoreConstants.MixedPort}");
 
             var domains = LoadDirectDomains(rulesFilePath);
             var list = string.Join(",", domains.Select(d => "\"" + d.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""));
-            var proxy = $"PROXY 127.0.0.1:{CoreConstants.HttpPort}";
+            var proxy = $"PROXY 127.0.0.1:{CoreConstants.MixedPort}";
             var js = string.Format(PacTemplate, list, proxy);
             return js;
         }

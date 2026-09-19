@@ -34,7 +34,7 @@ namespace Win7Proxy
             _url = new TextBox { Left = 12, Top = 36, Width = 520 };
             Controls.Add(_url);
 
-            Controls.Add(new Label { Left = 12, Top = 70, Width = 260, Text = "备注名称：", AutoSize = true });
+            Controls.Add(new Label { Left = 12, Top = 70, Width = 260, Text = "备注名称（留空则自动从订阅获取）：", AutoSize = true });
             _name = new TextBox { Left = 12, Top = 92, Width = 250 };
             Controls.Add(_name);
 
@@ -89,7 +89,7 @@ namespace Win7Proxy
             {
                 Id = string.IsNullOrEmpty(_existingId) ? Guid.NewGuid().ToString("N") : _existingId,
                 Url = _url.Text.Trim(),
-                Name = string.IsNullOrWhiteSpace(_name.Text) ? "订阅" : _name.Text.Trim(),
+                Name = _name.Text.Trim(),
                 AllowInsecureTls = _insecure.Checked,
                 Format = (SubscriptionFormat)_format.SelectedIndex
             };

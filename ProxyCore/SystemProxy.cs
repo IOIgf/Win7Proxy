@@ -27,8 +27,13 @@ namespace ProxyCore
             "172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;" +
             "172.28.*;172.29.*;172.30.*;172.31.*";
 
+        /// <summary>本地 mixed 端口（HTTP 与 SOCKS 共用）。启动/接管前由调用方设置。</summary>
+        public static int MixedPort { get; set; } = CoreConstants.MixedPort;
+
+        private const string OwnedServerValue = "OwnedServer";
+
         private static string OwnedProxyServer =>
-            $"http=127.0.0.1:{CoreConstants.HttpPort};socks=127.0.0.1:{CoreConstants.SocksPort}";
+            $"http=127.0.0.1:{MixedPort};socks=127.0.0.1:{MixedPort}";
 
         [DllImport("wininet.dll", SetLastError = true)]
         private static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
@@ -56,6 +61,7 @@ namespace ProxyCore
                             throw new ProxyCoreException("无法打开 Windows 系统代理设置。");
 
                         CaptureOriginalSettings(key);
+                        RecordOwnedServer();
 
                         // 分流（国内/私有网段直连、其余走代理）由内核 routing 规则完成，
                         // 不依赖 file:// PAC，兼容 Win7 上的 Chrome/Edge。
@@ -205,10 +211,37 @@ namespace ProxyCore
             {
                 var enabled = key.GetValue("ProxyEnable");
                 var server = key.GetValue("ProxyServer") as string;
-                return enabled != null && Convert.ToInt32(enabled) == 1 &&
-                       string.Equals(server, OwnedProxyServer, StringComparison.OrdinalIgnoreCase);
+                if (enabled == null || Convert.ToInt32(enabled) != 1) return false;
+                // 端口可能在两次运行之间被改过，优先拿上次实际写入的值比对，
+                // 否则会把"我们写的旧端口"误判成"用户自己改的"而拒绝恢复。
+                var owned = ReadOwnedServer();
+                if (string.IsNullOrEmpty(owned)) owned = OwnedProxyServer;
+                return string.Equals(server, owned, StringComparison.OrdinalIgnoreCase);
             }
             catch { return false; }
+        }
+
+        private static void RecordOwnedServer()
+        {
+            try
+            {
+                using (var backup = Registry.CurrentUser.CreateSubKey(BackupPath))
+                {
+                    if (backup != null)
+                        backup.SetValue(OwnedServerValue, OwnedProxyServer, RegistryValueKind.String);
+                }
+            }
+            catch { }
+        }
+
+        private static string ReadOwnedServer()
+        {
+            try
+            {
+                using (var backup = Registry.CurrentUser.OpenSubKey(BackupPath, false))
+                    return backup == null ? null : backup.GetValue(OwnedServerValue) as string;
+            }
+            catch { return null; }
         }
 
         private static void DeleteBackup()

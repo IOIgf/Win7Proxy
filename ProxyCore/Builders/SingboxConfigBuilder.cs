@@ -13,9 +13,10 @@ namespace ProxyCore
     public static class SingboxConfigBuilder
     {
         /// <param name="geoDbAvailable">core 目录下是否已放置规则模式需要的三个 .srs 文件。</param>
-        public static string BuildJson(Node node, ProxyMode mode, bool geoDbAvailable)
+        public static string BuildJson(Node node, ProxyMode mode, bool geoDbAvailable, InboundOptions inbound)
         {
             if (node == null) throw new ProxyCoreException("节点为空，无法生成配置。");
+            inbound = inbound ?? InboundOptions.Default;
 
             var root = new JObject
             {
@@ -24,7 +25,7 @@ namespace ProxyCore
                     ["output"] = "sing-box.log",
                     ["timestamp"] = true
                 },
-                ["inbounds"] = new JArray { SocksInbound(), HttpInbound() },
+                ["inbounds"] = new JArray { MixedInbound(inbound) },
                 ["outbounds"] = new JArray {
                     BuildProxyOutbound(node),
                     new JObject { ["type"] = "direct", ["tag"] = "direct" },
@@ -42,23 +43,14 @@ namespace ProxyCore
         // sing-box 1.13.0 起，inbound 上的 sniff / sniff_override_destination 字段被彻底移除，
         // 嗅探改为在 route.rules 里用 { "action": "sniff" } 触发（默认不改写目标地址，仅用于路由决策，
         // 等价于 v2ray 的 routeOnly）。见 BuildRoute。
-        private static JObject SocksInbound()
+        // sing-box 有原生 mixed 入站：一个端口同时接受 SOCKS 与 HTTP。
+        private static JObject MixedInbound(InboundOptions inbound)
         {
             return new JObject {
-                ["type"] = "socks",
-                ["tag"] = "socks",
-                ["listen"] = "127.0.0.1",
-                ["listen_port"] = CoreConstants.SocksPort
-            };
-        }
-
-        private static JObject HttpInbound()
-        {
-            return new JObject {
-                ["type"] = "http",
-                ["tag"] = "http",
-                ["listen"] = "127.0.0.1",
-                ["listen_port"] = CoreConstants.HttpPort
+                ["type"] = "mixed",
+                ["tag"] = "mixed",
+                ["listen"] = inbound.ListenAddress,
+                ["listen_port"] = inbound.MixedPort
             };
         }
 

@@ -134,16 +134,11 @@ namespace ProxyCore.Tests
                 var json = CoreConfigFactory.BuildJson(k, H2Node(), ProxyMode.Rule);
                 var root = JObject.Parse(json);
                 var ins = (JArray)root["inbounds"];
-                var ports = new System.Collections.Generic.HashSet<int>();
-                foreach (var ib in ins)
-                {
-                    // sing-box 用 listen_port，v2ray 系用 port
-                    var p = ib["port"] ?? ib["listen_port"];
-                    Assert.NotNull(p);
-                    ports.Add((int)p);
-                }
-                Assert.Contains(CoreConstants.SocksPort, ports);
-                Assert.Contains(CoreConstants.HttpPort, ports);
+                Assert.Single(ins);
+                // sing-box 用 listen_port，v2ray 系用 port
+                var p = ins[0]["port"] ?? ins[0]["listen_port"];
+                Assert.NotNull(p);
+                Assert.Equal(CoreConstants.MixedPort, (int)p);
             }
         }
 
@@ -380,21 +375,19 @@ namespace ProxyCore.Tests
         }
 
         [Fact]
-        public void 真实测速配置_只保留HTTP入站并改到指定端口()
+        public void 真实测速配置_使用指定mixed端口()
         {
-            var xray = CoreConfigFactory.BuildJson(CoreKind.Xray, H2Node(), ProxyMode.Global);
-            var r = JObject.Parse(RealLatencyTester.RetargetHttpInbound(xray, CoreKind.Xray, 12345));
-            var ins = (JArray)r["inbounds"];
-            Assert.Single(ins);
-            Assert.Equal("http", (string)ins[0]["protocol"]);
-            Assert.Equal(12345, (int)ins[0]["port"]);
+            var inbound = new InboundOptions { MixedPort = 12345 };
 
-            var sing = CoreConfigFactory.BuildJson(CoreKind.Singbox, H2Node(), ProxyMode.Global);
-            var r2 = JObject.Parse(RealLatencyTester.RetargetHttpInbound(sing, CoreKind.Singbox, 23456));
-            var ins2 = (JArray)r2["inbounds"];
-            Assert.Single(ins2);
-            Assert.Equal("http", (string)ins2[0]["type"]);
-            Assert.Equal(23456, (int)ins2[0]["listen_port"]);
+            var xray = CoreConfigFactory.BuildJson(CoreKind.Xray, H2Node(), ProxyMode.Global, null, inbound);
+            var xins = (JArray)JObject.Parse(xray)["inbounds"];
+            Assert.Single(xins);
+            Assert.Equal(12345, (int)xins[0]["port"]);
+
+            var sing = CoreConfigFactory.BuildJson(CoreKind.Singbox, H2Node(), ProxyMode.Global, null, inbound);
+            var sins = (JArray)JObject.Parse(sing)["inbounds"];
+            Assert.Single(sins);
+            Assert.Equal(12345, (int)sins[0]["listen_port"]);
         }
     }
 }
