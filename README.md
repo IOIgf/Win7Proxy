@@ -8,7 +8,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 **Hysteria2 由 Xray 与 sing-box 支持**（V2Ray 不支持）；Xray 官方的 Win7 构建同样包含 Hysteria 2，
 因此 Win7 上也能用，只需把内核更新到支持该协议的版本（官方 v26.3.27 起，用「更新内核」即可拉到最新版）。
 
-当前版本：**v1.3.1**
+当前版本：**v1.3.2**
 
 ## 一、前置条件（一次性的）
 
@@ -111,6 +111,15 @@ Linux/macOS 上可用 `./pack.sh [版本号]` 构建并打包（脚本假定 .NE
 打 `v*` 标签（如 `v1.3.1`）推送时，会自动创建 GitHub Release 并附上该 zip。
 
 ## 七、版本记录
+
+### v1.3.2
+
+- **修复带端口跳跃的 Hysteria2 节点导致 Xray 26.x 内核崩溃**：端口跳跃（`ports`）会生成
+  `finalmask.quicParams.udpHop`，但旧版未同时输出 `interval`。Xray 26.x 在缺省 interval 时
+  会把 30 秒的纳秒值再乘一次 `time.Second`，int64 溢出为负数，`hopLoop` 里的 `NewTicker`
+  直接 panic 并终止内核进程。表现为「测试延迟」对这类节点报「无法连接到远程服务器」，
+  且正常启动代理后首次走流量即断流。现在端口跳跃会显式带上 30 秒的 hop 间隔；
+  不带端口跳跃的节点不受影响。
 
 ### v1.3.1
 
