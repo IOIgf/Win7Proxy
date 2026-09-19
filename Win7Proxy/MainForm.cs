@@ -43,6 +43,17 @@ namespace Win7Proxy
         private readonly object _testingLock = new object();
         private System.Windows.Forms.Timer _spinTimer;
         private int _spinFrame;
+        private ComboBox _subFilter;
+        private string _filterSubscriptionId;   // null=全部, ""=手动, 其它=订阅 Id
+        private bool _suppressFilterEvent;
+        private List<Node> _view = new List<Node>();
+
+        private sealed class GroupItem
+        {
+            public string Id;
+            public string Text;
+            public override string ToString() { return Text; }
+        }
 
         private ToolStripMenuItem _miAutoStart;
         private ToolStripMenuItem _miAutoConnect;
@@ -174,6 +185,25 @@ namespace Win7Proxy
             _coreBox.SelectedIndex = (int)_state.Core;
             _coreBox.SelectedIndexChanged += (s, e) => OnCoreKindChanged();
             _toolPanel.Controls.Add(_coreBox);
+
+            var filterLabel = new Label
+            {
+                Text = "订阅:",
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(80, 84, 92),
+                Margin = new Padding(14, 9, 2, 0)
+            };
+            _toolPanel.Controls.Add(filterLabel);
+            _subFilter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9F) };
+            _subFilter.SelectedIndexChanged += (s, e) =>
+            {
+                if (_suppressFilterEvent) return;
+                var item = _subFilter.SelectedItem as GroupItem;
+                _filterSubscriptionId = item == null ? null : item.Id;
+                RefreshGrid();
+            };
+            _toolPanel.Controls.Add(_subFilter);
             _spinTimer = new System.Windows.Forms.Timer { Interval = 120 };
             _spinTimer.Tick += (s, e) =>
             {
@@ -238,13 +268,17 @@ namespace Win7Proxy
                 c.SortMode = DataGridViewColumnSortMode.Programmatic;
             _grid.SelectionChanged += (s, e) =>
             {
-                if (_grid.CurrentRow != null) { _state.SelectedIndex = _grid.CurrentRow.Index; _state.Save(); }
+                if (_grid.CurrentRow != null && _grid.CurrentRow.Index >= 0 && _grid.CurrentRow.Index < _view.Count)
+                {
+                    _state.SelectedIndex = _state.Nodes.IndexOf(_view[_grid.CurrentRow.Index]);
+                    _state.Save();
+                }
                 UpdateNodeLabel();
             };
             _grid.ColumnHeaderMouseClick += (s, e) => SortByColumn(e.ColumnIndex);
             _grid.CellDoubleClick += (s, e) =>
             {
-                if (e.RowIndex >= 0 && e.RowIndex < _state.Nodes.Count)
+                if (e.RowIndex >= 0 && e.RowIndex < _view.Count)
                 {
                     _grid.CurrentCell = _grid.Rows[e.RowIndex].Cells[0];
                     StartProxy(false);
@@ -320,7 +354,10 @@ namespace Win7Proxy
 
             RefreshGrid();
             if (_state.SelectedIndex >= 0 && _state.SelectedIndex < _state.Nodes.Count)
-                try { _grid.Rows[_state.SelectedIndex].Selected = true; } catch { }
+            {
+                int row = _view.IndexOf(_state.Nodes[_state.SelectedIndex]);
+                if (row >= 0) try { _grid.Rows[row].Selected = true; } catch { }
+            }
             UpdateNodeLabel();
 
             HiDpi.ScaleForDpi(this);   // 必须在所有控件创建完之后
@@ -442,7 +479,7 @@ namespace Win7Proxy
         {
             if (_grid.CurrentRow == null) return null;
             var i = _grid.CurrentRow.Index;
-            return (i >= 0 && i < _state.Nodes.Count) ? _state.Nodes[i] : null;
+            return (i >= 0 && i < _view.Count) ? _view[i] : null;
         }
 
         private void UpdateNodeLabel()
@@ -456,14 +493,18 @@ namespace Win7Proxy
         private void RefreshGrid()
         {
             if (InvokeRequired) { BeginInvoke((Action)RefreshGrid); return; }
+            RebuildGroupFilter();
+
             // 记录当前视图状态（按节点引用保存，排序/刷新后仍能对应到正确的行）
             int first = _grid.FirstDisplayedScrollingRowIndex;
             var selNodes = SelectedNodes();
-            var curNode = (_grid.CurrentRow != null && _grid.CurrentRow.Index < _state.Nodes.Count)
-                ? _state.Nodes[_grid.CurrentRow.Index] : null;
+            var curNode = (_grid.CurrentRow != null && _grid.CurrentRow.Index < _view.Count)
+                ? _view[_grid.CurrentRow.Index] : null;
+
+            _view = BuildView();
 
             _grid.Rows.Clear();
-            foreach (var n in _state.Nodes)
+            foreach (var n in _view)
             {
                 _grid.Rows.Add(
                     n.Remarks,
@@ -477,18 +518,62 @@ namespace Win7Proxy
             int? focusIdx = null;
             foreach (var n in selNodes)
             {
-                int idx = _state.Nodes.IndexOf(n);
+                int idx = _view.IndexOf(n);
                 if (idx >= 0) { _grid.Rows[idx].Selected = true; if (!focusIdx.HasValue) focusIdx = idx; }
             }
             if (curNode != null)
             {
-                int idx = _state.Nodes.IndexOf(curNode);
+                int idx = _view.IndexOf(curNode);
                 if (idx >= 0) { _grid.CurrentCell = _grid.Rows[idx].Cells[0]; focusIdx = idx; }
             }
             // 恢复滚动位置：优先让焦点行可见，否则回到原先的顶部行
             int scrollTo = focusIdx.HasValue ? focusIdx.Value : (first >= 0 ? first : 0);
             if (_grid.Rows.Count > 0)
                 _grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollTo, _grid.Rows.Count - 1);
+        }
+
+        private List<Node> BuildView()
+        {
+            var list = new List<Node>();
+            foreach (var n in _state.Nodes)
+                if (MatchesFilter(n)) list.Add(n);
+            return list;
+        }
+
+        private bool MatchesFilter(Node n)
+        {
+            if (_filterSubscriptionId == null) return true;
+            if (_filterSubscriptionId == "") return string.IsNullOrEmpty(n.SubscriptionId);
+            return n.SubscriptionId == _filterSubscriptionId;
+        }
+
+        // 重建「订阅」下拉：全部 + 每个订阅 + 手动；订阅被删/改名后自动跟上，
+        // 当前分组若已不存在则回落到「全部」。
+        private void RebuildGroupFilter()
+        {
+            if (_subFilter == null || _subFilter.IsDisposed) return;
+            _suppressFilterEvent = true;
+            try
+            {
+                var wanted = _filterSubscriptionId;
+                _subFilter.Items.Clear();
+                _subFilter.Items.Add(new GroupItem { Id = null, Text = "全部" });
+                foreach (var s in _state.Subscriptions)
+                    _subFilter.Items.Add(new GroupItem { Id = s.Id, Text = string.IsNullOrEmpty(s.Name) ? "(未命名)" : s.Name });
+                foreach (var n in _state.Nodes)
+                    if (string.IsNullOrEmpty(n.SubscriptionId))
+                    {
+                        _subFilter.Items.Add(new GroupItem { Id = "", Text = "手动" });
+                        break;
+                    }
+
+                int restore = 0;
+                for (int i = 0; i < _subFilter.Items.Count; i++)
+                    if (((GroupItem)_subFilter.Items[i]).Id == wanted) { restore = i; break; }
+                _filterSubscriptionId = ((GroupItem)_subFilter.Items[restore]).Id;
+                _subFilter.SelectedIndex = restore;
+            }
+            finally { _suppressFilterEvent = false; }
         }
 
         private void SortByColumn(int col)
@@ -815,7 +900,7 @@ namespace Win7Proxy
             foreach (DataGridViewRow row in _grid.SelectedRows)
             {
                 var i = row.Index;
-                if (i >= 0 && i < _state.Nodes.Count) list.Add(_state.Nodes[i]);
+                if (i >= 0 && i < _view.Count) list.Add(_view[i]);
             }
             return list;
         }
@@ -824,7 +909,7 @@ namespace Win7Proxy
         {
             List<Node> targets = _grid.SelectedRows.Count > 0
                 ? SelectedNodes()
-                : new List<Node>(_state.Nodes);
+                : new List<Node>(_view);
             if (targets.Count == 0) return;
 
             var indices = new List<int>();
@@ -832,7 +917,7 @@ namespace Win7Proxy
             var quicTargets = new List<Node>();
             foreach (var n in targets)
             {
-                int i = _state.Nodes.IndexOf(n);
+                int i = _view.IndexOf(n);
                 if (i >= 0) indices.Add(i);
                 // Hysteria2 跑在 QUIC/UDP 上，不在节点端口监听 TCP，用 TCP 测只会得到假的“超时”
                 if (n.Type == NodeType.Hysteria2) quicTargets.Add(n);
@@ -870,14 +955,14 @@ namespace Win7Proxy
                     }
                     catch { }
                     n.LatencyMs = ms;
-                    SetLatencyCell(_state.Nodes.IndexOf(n), ms < 0 ? "超时" : ms + " ms");
-                    lock (_testingLock) _testingRows.Remove(_state.Nodes.IndexOf(n));
+                    SetLatencyCell(_view.IndexOf(n), ms < 0 ? "超时" : ms + " ms");
+                    lock (_testingLock) _testingRows.Remove(_view.IndexOf(n));
                 });
 
                 // QUIC 类节点：顺序做真实延迟测试（每个都要临时拉起一个内核，不能并发）
                 foreach (var n in quicTargets)
                 {
-                    int idx = _state.Nodes.IndexOf(n);
+                    int idx = _view.IndexOf(n);
                     AppendLog("真实延迟测试：" + n.Remarks + "（Hysteria2/QUIC）...");
                     var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
                     int ms = RealLatencyTester.Test(_state.Core, n, coreDir, 8000, s => AppendLog("  " + s));
