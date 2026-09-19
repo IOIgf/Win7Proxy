@@ -14,6 +14,8 @@ namespace ProxyCore
     /// </summary>
     internal static class V2rayStyleConfigBuilder
     {
+        private const int HopIntervalSeconds = 30;
+
         public static XrayConfig Build(CoreSpec spec, Node node, ProxyMode mode)
         {
             if (node == null) throw new ProxyCoreException("节点为空，无法生成配置。");
@@ -321,7 +323,17 @@ namespace ProxyCore
 
             var quic = new JObject();
             var ports = NetUtil.SplitPortsRaw(n.Ports);
-            if (ports.Count > 0) quic["udpHop"] = new JObject { ["ports"] = string.Join(",", ports.ToArray()) };
+            if (ports.Count > 0)
+            {
+                // interval 必须显式给出：Xray 26.x 在未指定时会用 int64(30s 的纳秒值) 再做一次
+                // *time.Second，溢出为负数，hopLoop 里 NewTicker 直接 panic（"non-positive interval"），
+                // 内核进程随之中止——表现为主代理断流、真实延迟测试报「无法连接到远程服务器」。
+                quic["udpHop"] = new JObject
+                {
+                    ["ports"] = string.Join(",", ports.ToArray()),
+                    ["interval"] = HopIntervalSeconds
+                };
+            }
             if (n.UpMbps > 0) quic["brutalUp"] = n.UpMbps + " mbps";
             if (n.DownMbps > 0) quic["brutalDown"] = n.DownMbps + " mbps";
 

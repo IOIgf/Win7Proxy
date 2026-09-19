@@ -350,6 +350,8 @@ namespace ProxyCore.Tests
             Assert.Equal("salamander", (string)ss["finalmask"]["udp"][0]["type"]);
             Assert.Equal("op", (string)ss["finalmask"]["udp"][0]["settings"]["password"]);
             Assert.Equal("20000-30000", (string)ss["finalmask"]["quicParams"]["udpHop"]["ports"]);
+            // interval 缺失会让 Xray 26.x 在 hopLoop 里 int64 溢出 panic，必须随端口跳跃一起输出
+            Assert.Equal(30, (int)ss["finalmask"]["quicParams"]["udpHop"]["interval"]);
             Assert.Equal("100 mbps", (string)ss["finalmask"]["quicParams"]["brutalUp"]);
         }
 
