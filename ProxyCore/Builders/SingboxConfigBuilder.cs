@@ -21,8 +21,9 @@ namespace ProxyCore
             var root = new JObject
             {
                 ["log"] = new JObject {
+                    // 不写 output 文件：日志要能进程序的日志框（捕获 stdout/stderr），
+                    // 否则内核报错只落在 sing-box.log 里，界面上看不到。
                     ["level"] = "warn",
-                    ["output"] = "sing-box.log",
                     ["timestamp"] = true
                 },
                 ["inbounds"] = new JArray { MixedInbound(inbound) },

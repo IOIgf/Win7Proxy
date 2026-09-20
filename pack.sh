@@ -10,7 +10,7 @@ STAGE="$ROOT/stage"
 # 第 2 个参数可选，才是要下载的 Xray 版本 tag；不传则查 latest。
 # 旧脚本把同一个 VER 既当产物版本又当 Xray tag，传 ./pack.sh v1.5.0 会去下载
 # 并不存在的 Xray 发布标签，结果包里的内核和 geo 数据全是空的。
-APPVER="${1:-v1.5.2}"
+APPVER="${1:-v1.5.3}"
 XRAY_VER="${2:-}"
 OUT="$ROOT/Win7Proxy-${APPVER}.zip"
 

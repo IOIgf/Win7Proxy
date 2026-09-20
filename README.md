@@ -8,7 +8,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 **Hysteria2 由 Xray 与 sing-box 支持**（V2Ray 不支持）；Xray 官方的 Win7 构建同样包含 Hysteria 2，
 因此 Win7 上也能用，只需把内核更新到支持该协议的版本（官方 v26.3.27 起，用「更新内核」即可拉到最新版）。
 
-当前版本：**v1.5.2**
+当前版本：**v1.5.3**
 
 ## 一、前置条件（一次性的）
 
@@ -22,7 +22,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 
 ## 二、首次运行
 
-1. 解压 `Win7Proxy-v1.5.2.zip` 到任意目录（路径不要含中文/空格最佳）。
+1. 解压 `Win7Proxy-v1.5.3.zip` 到任意目录（路径不要含中文/空格最佳）。
 2. 内核已随包提供：`core\xray.exe` 与 `core\geoip.dat` / `core\geosite.dat` 解压即用。
    仅当要**更新**内核时，再运行 `fetch-core.bat` 拉取最新 xray-win7（内置多个 GitHub 镜像，逐个尝试）。
 3. 双击 `Win7Proxy.exe`。
@@ -113,9 +113,23 @@ Linux/macOS 上可用 `./pack.sh [程序版本号] [Xray 版本号]` 构建并�
 仓库已配置 GitHub Actions（`.github/workflows/build.yml`）：推送 `main`、发起 PR 或手动触发时，
   会先跑单元测试，再在 Linux runner 上构建 `net461` Release，下载 xray-win7 内核与 geo 数据
 （多镜像兜底），打包成 `Win7Proxy-<版本号>.zip` 上传为构件；
-打 `v*` 标签（如 `v1.5.2`）推送时，会自动创建 GitHub Release 并附上该 zip。
+打 `v*` 标签（如 `v1.5.3`）推送时，会自动创建 GitHub Release 并附上该 zip。
 
 ## 七、版本记录
+
+### v1.5.3
+
+**修复"内核报错在界面上完全看不到"**——这是排查一切连接问题的前提：
+
+- 旧版生成的内核配置把日志写进 `core\error.log`（Xray 的 `log.error`、sing-box 的 `log.output`），
+  程序日志框捕获的是进程 stdout/stderr，于是几乎一片空白；用户只能看到浏览器那句
+  「连接意外终止」，真正的原因全在文件里。
+- 同时日志级别是 `warning`，而 Xray 把具体的失败原因（`x509: certificate signed by unknown authority`、
+  QUIC/ALPN 握手失败、认证失败等）打在 **info** 级，`warning` 只剩下毫无信息量的
+  `failed to read response ... closed pipe`。
+- 现在：不再重定向到文件，Xray 级别改为 `info`。**从本版起，真实失败原因会直接显示在程序日志框中。**
+- 另经真实端到端验证（真实 Xray 服务端 + 官方 hysteria2 服务端）：本程序生成的 Trojan 与
+  Hysteria2 配置在证书可信任（或已提供 `pinSHA256`）时均可正常连通。
 
 ### v1.5.2
 

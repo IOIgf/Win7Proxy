@@ -24,9 +24,11 @@ namespace ProxyCore
             var cfg = new XrayConfig
             {
                 Log = new JObject {
-                    ["loglevel"] = "warning",
-                    ["access"] = "access.log",
-                    ["error"] = "error.log"
+                    // 只设 loglevel，不写 access/error 文件：Xray 一旦配置了 error 文件，
+                    // 错误就只进文件，程序日志框（捕获 stdout/stderr）几乎什么都看不到。
+                    // 级别用 info：具体的失败原因（x509 证书、QUIC/ALPN、认证失败等）
+                    // Xray 是打在 info 级的，warning 只会剩一句"failed to read response"。
+                    ["loglevel"] = "info"
                 },
                 Inbounds = new JArray { MixedInbound(spec, inbound) },
                 Outbounds = new JArray
