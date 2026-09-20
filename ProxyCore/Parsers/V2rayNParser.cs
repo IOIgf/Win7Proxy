@@ -132,6 +132,7 @@ namespace ProxyCore.Parsers
             n.Fingerprint = Str(o, "fp", "fingerprint");
             n.Alpn = Str(o, "alpn");
             n.AllowInsecure = Bool(o, "allowInsecure", "allow_insecure", "skip-cert-verify");
+            n.PinnedCertSha256 = Str(o, "pinSHA256", "pin-sha256", "pinnedPeerCertSha256", "certSha256");
 
             var tls = NetUtil.NormalizeSecurity(Str(o, "tls", "security"));
             n.TLS = tls == "tls" || tls == "reality";
@@ -163,6 +164,7 @@ namespace ProxyCore.Parsers
             n.Alpn = UriUnescape(Get(q, "alpn"));
             n.ServiceName = UriUnescape(Get(q, "serviceName", "grpc-service-name"));
             n.AllowInsecure = IsTrue(q, "allowInsecure", "allowInsecureTls", "skip-cert-verify");
+            n.PinnedCertSha256 = CertPin(q);
             return n;
         }
 
@@ -188,6 +190,7 @@ namespace ProxyCore.Parsers
             n.Alpn = UriUnescape(Get(q, "alpn"));
             n.ServiceName = UriUnescape(Get(q, "serviceName", "grpc-service-name"));
             n.AllowInsecure = IsTrue(q, "allowInsecure", "allowInsecureTls", "skip-cert-verify");
+            n.PinnedCertSha256 = CertPin(q);
             return n;
         }
 
@@ -286,7 +289,8 @@ namespace ProxyCore.Parsers
             n.Alpn = UriUnescape(Get(q, "alpn"));
             n.Obfs = Get(q, "obfs");
             n.ObfsPassword = Get(q, "obfs-password", "obfs-pwd", "obfsparam");
-            n.PinnedCertSha256 = Get(q, "pinSHA256", "pin-sha256", "pinsha256");
+            n.PinnedCertSha256 = Get(q, "pinSHA256", "pin-sha256", "pinsha256",
+                "pinnedPeerCertSha256", "pinned-peer-cert-sha256", "certSha256", "cert-sha256");
             n.AllowInsecure = IsTrue(q, "insecure", "allowInsecure", "skip-cert-verify");
             n.UpMbps = ToInt(Get(q, "up_mbps", "up"));
             n.DownMbps = ToInt(Get(q, "down_mbps", "down"));
@@ -362,7 +366,16 @@ namespace ProxyCore.Parsers
         private static bool IsTrue(Dictionary<string, string> q, params string[] keys)
         {
             var v = Get(q, keys);
-            return v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase);
+            return v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("on", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>证书 SHA-256 pin：不同订阅/客户端用的字段名不一样，逐个试。</summary>
+        private static string CertPin(Dictionary<string, string> q)
+        {
+            return Get(q, "pinSHA256", "pin-sha256", "pinsha256",
+                "pinnedPeerCertSha256", "pinned-peer-cert-sha256", "certSha256", "cert-sha256");
         }
 
         private static string SplitLink(string link, string scheme, out string remarks)

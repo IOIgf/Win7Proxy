@@ -7,7 +7,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>Win7Proxy</AssemblyName>
     <RootNamespace>Win7Proxy</RootNamespace>
-    <Version>1.5.1</Version>
+    <Version>1.5.2</Version>
     <!-- 嵌入 Win32 清单：声明 DPI 感知，避免高 DPI 下窗口被位图拉伸而发虚 -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>app.ico</ApplicationIcon>

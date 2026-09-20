@@ -163,6 +163,9 @@ namespace ProxyCore.Parsers
             }
 
             n.AllowInsecure = GetBool(m, "skip-cert-verify");
+            // pinSHA256 任何类型都可能带；以前只在 hysteria2 分支里读，trojan/vless 带了也会被丢掉。
+            if (string.IsNullOrEmpty(n.PinnedCertSha256))
+                n.PinnedCertSha256 = GetStr(m, "pinSHA256", "pin-sha256", "pinnedPeerCertSha256", "certSha256");
             return n;
         }
 

@@ -8,7 +8,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 **Hysteria2 由 Xray 与 sing-box 支持**（V2Ray 不支持）；Xray 官方的 Win7 构建同样包含 Hysteria 2，
 因此 Win7 上也能用，只需把内核更新到支持该协议的版本（官方 v26.3.27 起，用「更新内核」即可拉到最新版）。
 
-当前版本：**v1.5.1**
+当前版本：**v1.5.2**
 
 ## 一、前置条件（一次性的）
 
@@ -22,7 +22,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 
 ## 二、首次运行
 
-1. 解压 `Win7Proxy-v1.5.1.zip` 到任意目录（路径不要含中文/空格最佳）。
+1. 解压 `Win7Proxy-v1.5.2.zip` 到任意目录（路径不要含中文/空格最佳）。
 2. 内核已随包提供：`core\xray.exe` 与 `core\geoip.dat` / `core\geosite.dat` 解压即用。
    仅当要**更新**内核时，再运行 `fetch-core.bat` 拉取最新 xray-win7（内置多个 GitHub 镜像，逐个尝试）。
 3. 双击 `Win7Proxy.exe`。
@@ -113,9 +113,30 @@ Linux/macOS 上可用 `./pack.sh [程序版本号] [Xray 版本号]` 构建并�
 仓库已配置 GitHub Actions（`.github/workflows/build.yml`）：推送 `main`、发起 PR 或手动触发时，
   会先跑单元测试，再在 Linux runner 上构建 `net461` Release，下载 xray-win7 内核与 geo 数据
 （多镜像兜底），打包成 `Win7Proxy-<版本号>.zip` 上传为构件；
-打 `v*` 标签（如 `v1.5.1`）推送时，会自动创建 GitHub Release 并附上该 zip。
+打 `v*` 标签（如 `v1.5.2`）推送时，会自动创建 GitHub Release 并附上该 zip。
 
 ## 七、版本记录
+
+### v1.5.2
+
+修复自签名证书的 **Trojan / Hysteria2** 节点连不上（表现为浏览器「连接意外终止」）：
+
+- **根因**：Xray 26.x 已彻底移除 `allowInsecure`，官方替代只有 `pinnedPeerCertSha256`
+  （且**只接受十六进制**）。自签名证书的服务器在无法跳过校验时，TLS 握手会被内核拒绝并拆掉连接。
+  Trojan / Hysteria2 恰恰是最常用自签名证书、最常依赖 `insecure=1` / `skip-cert-verify` 的协议。
+- **`tls=1` / `security=1` 不再退化成明文**：旧版 `NormalizeSecurity` 只认 `"true"` 不认 `"1"`，
+  于是生成 `"security": "none"`，等于用明文去连 TLS 端口，Trojan 必然失败。现在 `1`/`xtls`/`yes`/`on`
+  都归一化为 `tls`，`0`/`off`/`no` 归一化为 `none`。
+- **base64 的 `pinSHA256` 不再被丢弃**：Hysteria2 分享链接里的 pin 基本都是 base64，
+  而 Xray 只认十六进制。旧版遇到 base64 直接返回空串，pin 静默失效；现在会自动转成十六进制
+  （兼容 URL-safe 与无填充写法）。
+- **Trojan / VLESS / VMess 也开始解析证书 pin**：此前只有 Hysteria2 分支读 `pinSHA256`，
+  Trojan 节点即使写了 pin 也会被丢掉。现在链接与 Clash 的所有节点类型都解析
+  `pinSHA256` / `pinnedPeerCertSha256` / `certSha256`。
+- 提示：若日志里出现「Xray 已移除 allowInsecure…」而你手上又没有任何 pin，
+  Xray 26.x 下无法跳过校验（Win7 也用不了 sing-box）。可用
+  `core\xray.exe tls ping <节点域名>` 取到 `Cert's leaf SHA256:` 后，把
+  `pinSHA256=<该十六进制值>` 加进节点链接再导入。
 
 ### v1.5.1
 

@@ -53,12 +53,19 @@ namespace ProxyCore
             switch (sec.Trim().ToLowerInvariant())
             {
                 case "tls":
+                case "xtls":   // 链接里 security=xtls 其实就是 tls（flow 另算）
                 case "true":   // 有些订阅直接写 "tls": true
+                case "1":      // 也有写 tls=1 / security=1 的
+                case "yes":
+                case "on":
                     return "tls";
                 case "reality":
                     return "reality";
                 case "none":
                 case "false":
+                case "0":
+                case "no":
+                case "off":
                 case "":
                     return "none";
                 default:
@@ -67,20 +74,48 @@ namespace ProxyCore
         }
 
         /// <summary>
-        /// 把证书 SHA-256 pin 归一化为无分隔的小写十六进制（Xray 的 pinnedPeerCertSha256 要求）。
-        /// 订阅里可能是 "de:ad:be:ef" 或 "DE AD BE EF"；不是合法 32 字节哈希则返回空串。
+        /// 把证书 SHA-256 pin 归一化为无分隔的小写十六进制（Xray 的 pinnedPeerCertSha256 只认十六进制）。
+        /// 订阅里的写法很杂：十六进制 "de:ad:be:ef" / "DE AD BE EF"，或 hysteria2 链接常见的
+        /// base64（含 URL-safe 无填充）。不是合法 32 字节哈希则返回空串。
         /// </summary>
         public static string NormalizeCertPin(string pin)
         {
             if (string.IsNullOrWhiteSpace(pin)) return "";
-            var sb = new StringBuilder();
-            foreach (var ch in pin)
+            var raw = pin.Trim();
+
+            // 1) 十六进制（可带 :/空格/- 分隔）
+            var hex = new StringBuilder();
+            var isHex = true;
+            foreach (var ch in raw)
             {
                 if (ch == ':' || ch == ' ' || ch == '-') continue;
-                if (!Uri.IsHexDigit(ch)) return "";
-                sb.Append(char.ToLowerInvariant(ch));
+                if (!Uri.IsHexDigit(ch)) { isHex = false; break; }
+                hex.Append(char.ToLowerInvariant(ch));
             }
-            return sb.Length == 64 ? sb.ToString() : "";
+            if (isHex && hex.Length == 64) return hex.ToString();
+
+            // 2) base64：hysteria2 分享链接里的 pinSHA256 基本都是 base64 的 SHA-256
+            try
+            {
+                var b64 = raw.Replace('-', '+').Replace('_', '/');
+                switch (b64.Length % 4)
+                {
+                    case 2: b64 += "=="; break;
+                    case 3: b64 += "="; break;
+                }
+                var bytes = Convert.FromBase64String(b64);
+                if (bytes.Length == 32) return ToHex(bytes);
+            }
+            catch { }
+
+            return "";
+        }
+
+        private static string ToHex(byte[] bytes)
+        {
+            var sb = new StringBuilder(bytes.Length * 2);
+            foreach (var b in bytes) sb.Append(b.ToString("x2", CultureInfo.InvariantCulture));
+            return sb.ToString();
         }
 
         /// <summary>把 alpn 字符串（"h2,http/1.1"）拆成数组。</summary>
