@@ -106,22 +106,27 @@ namespace ProxyCore
 
             // geo 数据：v2ray 系用 .dat；sing-box 用按标签拆分的 .srs 规则集
             // （sing-box 1.12+ 起 geosite/geoip 改为 .srs 格式，单体 geosite.db/geoip.db 在 1.14.0 已失效）。
+            // 逐个检查结果：缺了地理数据规则模式就不可用，必须让用户知道，
+            // 而不是"内核安装完成"之后一到规则模式就报错。
+            var geoOk = true;
             if (spec.NeedsGeoDb)
             {
-                Download("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/" + CoreConstants.GeoIpCnSrs,
+                geoOk &= Download("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/" + CoreConstants.GeoIpCnSrs,
                          Path.Combine(coreDir, CoreConstants.GeoIpCnSrs), 5000, log);
-                Download("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/" + CoreConstants.GeoSiteCnSrs,
+                geoOk &= Download("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/" + CoreConstants.GeoSiteCnSrs,
                          Path.Combine(coreDir, CoreConstants.GeoSiteCnSrs), 5000, log);
-                Download("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/" + CoreConstants.GeoSiteAdsSrs,
+                geoOk &= Download("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/" + CoreConstants.GeoSiteAdsSrs,
                          Path.Combine(coreDir, CoreConstants.GeoSiteAdsSrs), 5000, log);
             }
             else
             {
-                Download("https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
+                geoOk &= Download("https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
                          Path.Combine(coreDir, CoreConstants.GeoIpFile), 100000, log);
-                Download("https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
+                geoOk &= Download("https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
                          Path.Combine(coreDir, CoreConstants.GeoSiteFile), 100000, log);
             }
+            if (!geoOk)
+                log("警告：地理规则数据未能全部更新（原有文件已保留）。规则模式可能无法分流，请稍后重试「更新内核」。");
 
             return true;
         }
@@ -152,10 +157,15 @@ namespace ProxyCore
             return null;
         }
 
-        /// <summary>依次尝试各镜像下载文件，成功返回 true。</summary>
+        /// <summary>
+        /// 依次尝试各镜像下载文件，成功返回 true。
+        /// 先写到 ".part" 临时文件，校验通过后才替换目标文件：
+        /// 旧实现会在尝试前先删掉目标文件，一旦所有镜像都失败，
+        /// 原本可用的 geoip.dat / geosite.dat 就被删了，规则模式随之报错。
+        /// </summary>
         private static bool Download(string url, string outFile, long minBytes, Action<string> log)
         {
-            if (File.Exists(outFile)) { try { File.Delete(outFile); } catch { } }
+            var tmp = outFile + ".part";
 
             foreach (var m in Mirrors)
             {
@@ -163,14 +173,16 @@ namespace ProxyCore
                 log("尝试：" + full);
                 try
                 {
+                    try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
                     using (var wc = new TimeoutWebClient(120000))
                     {
                         wc.Headers.Add("User-Agent", "Win7Proxy");
-                        wc.DownloadFile(full, outFile);
+                        wc.DownloadFile(full, tmp);
                     }
-                    var sz = File.Exists(outFile) ? new FileInfo(outFile).Length : 0;
+                    var sz = File.Exists(tmp) ? new FileInfo(tmp).Length : 0;
                     if (sz >= minBytes)
                     {
+                        ReplaceFile(tmp, outFile);
                         log("  OK：" + Path.GetFileName(outFile) + "（" + sz + " 字节）");
                         return true;
                     }
@@ -181,8 +193,23 @@ namespace ProxyCore
                     log("  失败：" + ex.Message);
                 }
             }
+
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
             log("全部镜像均失败：" + url);
             return false;
+        }
+
+        /// <summary>用下载好的临时文件替换目标文件；失败时目标文件保持原样。</summary>
+        private static void ReplaceFile(string source, string target)
+        {
+            if (File.Exists(target)) File.Delete(target);
+            try { File.Move(source, target); }
+            catch
+            {
+                // 极端情况下 Move 失败（跨卷、目标被占用），退化为复制，保证目标文件可用。
+                File.Copy(source, target, true);
+                try { File.Delete(source); } catch { }
+            }
         }
 
         private static string FindFile(string dir, string fileName)

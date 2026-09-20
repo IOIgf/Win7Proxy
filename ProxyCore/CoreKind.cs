@@ -70,6 +70,27 @@ namespace ProxyCore
                 if (string.IsNullOrEmpty(n.Password)) return "Shadowsocks 节点缺少密码。";
                 if (Kind == CoreKind.V2ray && n.EncryptMethod.StartsWith("2022-", StringComparison.OrdinalIgnoreCase))
                     return "V2Ray 不支持 SS2022 加密，请换用 Xray 或 sing-box。";
+
+                // SIP003 插件：sing-box 原生支持 obfs-local / v2ray-plugin；
+                // Xray/V2Ray 没有插件字段，只有 v2ray-plugin 的 websocket 模式能等价映射。
+                var plugin = SsPluginParser.Parse(n.Extra);
+                if (plugin != null)
+                {
+                    if (Kind == CoreKind.Singbox)
+                    {
+                        if (!plugin.IsObfs && !plugin.IsV2rayPlugin)
+                            return "sing-box 不支持的 Shadowsocks 插件：" + plugin.Name + "（仅支持 obfs-local 与 v2ray-plugin）。";
+                    }
+                    else
+                    {
+                        if (plugin.IsObfs)
+                            return "Xray/V2Ray 不支持 simple-obfs（" + plugin.Name + "）混淆插件，请切换到 sing-box 内核，或改用不带插件的节点。";
+                        if (!plugin.IsV2rayPlugin)
+                            return "Xray/V2Ray 不支持的 Shadowsocks 插件：" + plugin.Name + "。";
+                        if (!plugin.IsWebsocketV2rayPlugin)
+                            return "Xray/V2Ray 只能表达 v2ray-plugin 的 websocket 模式，当前模式为 " + plugin.Mode + "，请改用 sing-box。";
+                    }
+                }
             }
 
             if (n.Type == NodeType.Hysteria2)

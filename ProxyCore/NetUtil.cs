@@ -96,14 +96,17 @@ namespace ProxyCore
             return list;
         }
 
-        /// <summary>拆分 Hysteria2 端口跳跃范围（如 "20000-30000,443"），保留原始的区间写法。</summary>
+        /// <summary>
+        /// 拆分 Hysteria2 端口跳跃范围（如 "20000-30000,443"），统一成 Xray 需要的连字符写法：
+        /// 订阅里可能写 "20000:30000"（sing-box 风格），Xray 的 udpHop 只认连字符。
+        /// </summary>
         public static List<string> SplitPortsRaw(string ports)
         {
             var list = new List<string>();
             if (string.IsNullOrWhiteSpace(ports)) return list;
             foreach (var part in ports.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                var p = part.Trim();
+                var p = part.Trim().Replace(':', '-');
                 if (p != "") list.Add(p);
             }
             return list;

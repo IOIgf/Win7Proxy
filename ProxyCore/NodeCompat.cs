@@ -38,6 +38,14 @@ namespace ProxyCore
             if (n.Type == NodeType.Hysteria2 && !spec.Hysteria2)
                 list.Add(spec.Name + " 不支持 Hysteria2，内核会拒绝启动（Xray 与 sing-box 支持）。");
 
+            if (n.Type == NodeType.Shadowsocks)
+            {
+                var plugin = SsPluginParser.Parse(n.Extra);
+                if (plugin != null && plugin.IsV2rayPlugin && spec.Kind != CoreKind.Singbox)
+                    list.Add("Shadowsocks v2ray-plugin 已等价映射为 WebSocket 传输"
+                        + (plugin.Tls ? "（TLS）" : "") + "；Xray/V2Ray 本身没有 SIP003 插件字段。");
+            }
+
             if (n.AllowInsecure && spec.Kind == CoreKind.Xray &&
                 NetUtil.NormalizeCertPin(n.PinnedCertSha256) == "")
                 list.Add("Xray 已移除 allowInsecure（跳过证书校验），将改用严格校验；"

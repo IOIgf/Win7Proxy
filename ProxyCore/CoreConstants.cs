@@ -4,7 +4,9 @@ namespace ProxyCore
     public static class CoreConstants
     {
         public const int MixedPort = 10808;
-        public const int PacPort = 10810;
+
+        /// <summary>程序版本，用于 User-Agent 等；与 Win7Proxy.csproj 的 &lt;Version&gt; 保持一致。</summary>
+        public const string AppVersion = "1.5.1";
 
         public const string CoreDir = "core";
         public const string XrayExe = "xray.exe";

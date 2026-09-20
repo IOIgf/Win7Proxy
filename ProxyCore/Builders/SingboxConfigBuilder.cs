@@ -84,6 +84,14 @@ namespace ProxyCore
                     ob["type"] = "shadowsocks";
                     ob["method"] = n.EncryptMethod;
                     ob["password"] = n.Password;
+                    // sing-box 出站原生支持 SIP003 插件（仅 obfs-local 与 v2ray-plugin），
+                    // 直接透传即可；能力检查在 CoreSpec.ReasonUnsupported 里做。
+                    var plugin = SsPluginParser.Parse(n.Extra);
+                    if (plugin != null)
+                    {
+                        ob["plugin"] = plugin.IsObfs ? "obfs-local" : plugin.Name;
+                        if (!string.IsNullOrEmpty(plugin.Options)) ob["plugin_opts"] = plugin.Options;
+                    }
                     break;
 
                 case NodeType.Socks:

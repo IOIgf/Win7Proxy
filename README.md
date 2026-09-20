@@ -8,7 +8,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 **Hysteria2 由 Xray 与 sing-box 支持**（V2Ray 不支持）；Xray 官方的 Win7 构建同样包含 Hysteria 2，
 因此 Win7 上也能用，只需把内核更新到支持该协议的版本（官方 v26.3.27 起，用「更新内核」即可拉到最新版）。
 
-当前版本：**v1.5.0**
+当前版本：**v1.5.1**
 
 ## 一、前置条件（一次性的）
 
@@ -22,7 +22,7 @@ Windows 10/11 还可切换 V2Ray 或 sing-box，以运行 Xray 已移除的 h2 �
 
 ## 二、首次运行
 
-1. 解压 `Win7Proxy-v1.3.1.zip` 到任意目录（路径不要含中文/空格最佳）。
+1. 解压 `Win7Proxy-v1.5.1.zip` 到任意目录（路径不要含中文/空格最佳）。
 2. 内核已随包提供：`core\xray.exe` 与 `core\geoip.dat` / `core\geosite.dat` 解压即用。
    仅当要**更新**内核时，再运行 `fetch-core.bat` 拉取最新 xray-win7（内置多个 GitHub 镜像，逐个尝试）。
 3. 双击 `Win7Proxy.exe`。
@@ -104,16 +104,39 @@ dotnet build Win7Proxy/Win7Proxy.csproj -c Release -f net461
 dotnet test ProxyCore.Tests/ProxyCore.Tests.csproj
 ```
 
-Linux/macOS 上可用 `./pack.sh [版本号]` 构建并打包（脚本假定 .NET SDK 在 `./.dotnet/dotnet`）。
+Linux/macOS 上可用 `./pack.sh [程序版本号] [Xray 版本号]` 构建并打包
+（两个参数都可省略：版本号只影响产物文件名，Xray 版本号省略时自动查 latest；
+脚本假定 .NET SDK 在 `./.dotnet/dotnet`）。
 
 ### 自动构建与发布
 
 仓库已配置 GitHub Actions（`.github/workflows/build.yml`）：推送 `main`、发起 PR 或手动触发时，
   会先跑单元测试，再在 Linux runner 上构建 `net461` Release，下载 xray-win7 内核与 geo 数据
 （多镜像兜底），打包成 `Win7Proxy-<版本号>.zip` 上传为构件；
-打 `v*` 标签（如 `v1.3.1`）推送时，会自动创建 GitHub Release 并附上该 zip。
+打 `v*` 标签（如 `v1.5.1`）推送时，会自动创建 GitHub Release 并附上该 zip。
 
 ## 七、版本记录
+
+### v1.5.1
+
+- **更新内核不再删掉可用的 geo 数据**：旧版下载前会先删除目标文件，一旦所有镜像都失败，
+  原本正常的 `geoip.dat` / `geosite.dat` / `.srs` 就被删掉，规则模式随之报错，界面却仍显示"安装完成"。
+  现在先下载到 `.part` 临时文件、校验通过再替换，下载结果也会明确提示。
+- **修复测延迟与界面刷新的数据竞争**：测试线程原先直接按行号读写共享的界面列表，
+  期间导入/删除节点或切换分组会写错行甚至抛异常。现在改为按节点引用在 UI 线程重新映射行号，
+  并在 UI 线程存盘，避免"集合已被修改"。
+- **Shadowsocks SIP003 插件不再被静默忽略**：sing-box 内核直接透传 `plugin` / `plugin_opts`
+  （`obfs-local` / `v2ray-plugin`）；Xray / V2Ray 把 `v2ray-plugin` 的 websocket 模式等价映射为
+  ws 传输（含 TLS），无法表达的 `simple-obfs` 会在启动前明确报错，而不是生成一份连不上的配置。
+- **修复 Hysteria2 端口跳跃区间分隔符**：订阅里写成 `20000:30000` 时，Xray 的 `udpHop`
+  现在会归一化为连字符写法（sing-box 仍用冒号）。
+- **打包脚本 `pack.sh` 参数不再串用**：旧版把"程序版本号"同时当成 Xray 版本标签，
+  执行 `./pack.sh v1.5.0` 会去下载不存在的 Xray 发布，产出的包没有内核与 geo 数据。
+  现在两个参数分开：`./pack.sh [程序版本号] [Xray 版本号]`。
+- 修补界面细节：只选中分组标题行时测延迟会给出提示而不是静默无反应；
+  最小化到托盘时恢复滚动位置不再可能抛异常。
+- 清理：`PacGenerator` 去掉无意义的 `pacPort` 参数、移除已废弃的 `CoreConstants.PacPort`；
+  订阅 User-Agent 改用统一版本常量；CI 开发构建版本号从 `Win7Proxy.csproj` 读取。
 
 ### v1.5.0
 

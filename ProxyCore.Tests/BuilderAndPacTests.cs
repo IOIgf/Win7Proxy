@@ -72,7 +72,7 @@ namespace ProxyCore.Tests
         [Fact]
         public void PacGlobal()
         {
-            var pac = PacGenerator.Build(ProxyMode.Global, CoreConstants.PacPort, null);
+            var pac = PacGenerator.Build(ProxyMode.Global, null);
             Assert.Contains("PROXY 127.0.0.1:" + CoreConstants.MixedPort, pac);
             Assert.Contains("FindProxyForURL", pac);
         }
@@ -80,14 +80,14 @@ namespace ProxyCore.Tests
         [Fact]
         public void PacDirect()
         {
-            var pac = PacGenerator.Build(ProxyMode.Direct, CoreConstants.PacPort, null);
+            var pac = PacGenerator.Build(ProxyMode.Direct, null);
             Assert.Contains("DIRECT", pac);
         }
 
         [Fact]
         public void PacRule()
         {
-            var pac = PacGenerator.Build(ProxyMode.Rule, CoreConstants.PacPort, null);
+            var pac = PacGenerator.Build(ProxyMode.Rule, null);
             Assert.Contains("DIRECT", pac);
             Assert.Contains("PROXY 127.0.0.1:" + CoreConstants.MixedPort, pac);
             Assert.Contains("FindProxyForURL", pac);

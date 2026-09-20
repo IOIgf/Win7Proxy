@@ -39,7 +39,9 @@ namespace Win7Proxy
         private bool _sortAsc = true;
         private bool _realExit = false;
         private Button _testBtn;
-        private readonly HashSet<int> _testingRows = new HashSet<int>();
+        // 记录"正在测延迟"的节点本身，而不是行号：列表可能在测试期间被刷新/重排，
+        // 行号会失效并把动画写到别的行上。
+        private readonly HashSet<Node> _testingNodes = new HashSet<Node>();
         private readonly object _testingLock = new object();
         private System.Windows.Forms.Timer _spinTimer;
         private int _spinFrame;
@@ -219,11 +221,14 @@ namespace Win7Proxy
                 if (_grid.IsDisposed) return;
                 _spinFrame = (_spinFrame + 1) % 4;
                 string glyph = new[] { "◐", "◓", "◑", "◒" }[_spinFrame];
-                lock (_testingLock)
+                // 定时器跑在 UI 线程上，按节点重新映射行号，列表被刷新也不会写错行。
+                List<Node> pending;
+                lock (_testingLock) pending = new List<Node>(_testingNodes);
+                foreach (var n in pending)
                 {
-                    foreach (int idx in _testingRows)
-                        if (idx >= 0 && idx < _grid.Rows.Count)
-                            _grid.Rows[idx].Cells["latency"].Value = glyph;
+                    int idx = RowOfNode(n);
+                    if (idx >= 0 && idx < _grid.Rows.Count)
+                        _grid.Rows[idx].Cells["latency"].Value = glyph;
                 }
             };
             layout.Controls.Add(_toolPanel, 0, 0);
@@ -529,7 +534,8 @@ namespace Win7Proxy
             RebuildGroupFilter();
 
             // 记录当前视图状态（按节点引用保存，排序/刷新后仍能对应到正确的行）
-            int first = _grid.FirstDisplayedScrollingRowIndex;
+            int first = 0;
+            try { first = _grid.FirstDisplayedScrollingRowIndex; } catch { }
             var selNodes = SelectedNodes();
             var curNode = NodeAtRow(_grid.CurrentRow == null ? -1 : _grid.CurrentRow.Index);
 
@@ -571,10 +577,14 @@ namespace Win7Proxy
                 int idx = RowOfNode(curNode);
                 if (idx >= 0) { _grid.CurrentCell = _grid.Rows[idx].Cells[0]; focusIdx = idx; }
             }
-            // 恢复滚动位置：优先让焦点行可见，否则回到原先的顶部行
+            // 恢复滚动位置：优先让焦点行可见，否则回到原先的顶部行。
+            // 窗体最小化到托盘/句柄未就绪时设置该属性会抛异常，不能让它冒泡到 UI 线程。
             int scrollTo = focusIdx.HasValue ? focusIdx.Value : (first >= 0 ? first : 0);
             if (_grid.Rows.Count > 0)
-                _grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollTo, _grid.Rows.Count - 1);
+            {
+                try { _grid.FirstDisplayedScrollingRowIndex = Math.Min(scrollTo, _grid.Rows.Count - 1); }
+                catch { }
+            }
         }
 
         // 按订阅把节点分行：每个分组先放一行标题，再放它的节点；折叠的分组只留标题。
@@ -1005,29 +1015,43 @@ namespace Win7Proxy
 
         private void TestLatency()
         {
-            List<Node> targets = _grid.SelectedRows.Count > 0
-                ? SelectedNodes()
-                : new List<Node>(_view);
+            List<Node> targets;
+            if (_grid.SelectedRows.Count > 0)
+            {
+                targets = SelectedNodes();
+                // 只点了分组标题行时 SelectedNodes() 是空的，静默返回会让用户以为按钮坏了。
+                if (targets.Count == 0)
+                {
+                    MessageBox.Show("选中的是分组标题行，请选中具体节点再测试（点标题行是折叠/展开）。",
+                        "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+            }
+            else
+            {
+                targets = new List<Node>(_view);
+            }
             if (targets.Count == 0) return;
 
-            var indices = new List<int>();
             var tcpTargets = new List<Node>();
             var quicTargets = new List<Node>();
             foreach (var n in targets)
             {
-                int i = RowOfNode(n);
-                if (i >= 0) indices.Add(i);
                 // Hysteria2 跑在 QUIC/UDP 上，不在节点端口监听 TCP，用 TCP 测只会得到假的“超时”
                 if (n.Type == NodeType.Hysteria2) quicTargets.Add(n);
                 else tcpTargets.Add(n);
             }
-            lock (_testingLock) { _testingRows.Clear(); _testingRows.UnionWith(indices); }
+
+            lock (_testingLock) { _testingNodes.Clear(); _testingNodes.UnionWith(targets); }
             if (_testBtn != null && !_testBtn.IsDisposed) _testBtn.Enabled = false;
             _spinFrame = 0;
             string glyph0 = new[] { "◐", "◓", "◑", "◒" }[0];
-            foreach (int i in indices)
+            foreach (var n in targets)
+            {
+                int i = RowOfNode(n);
                 if (i >= 0 && i < _grid.Rows.Count)
                     _grid.Rows[i].Cells["latency"].Value = glyph0;
+            }
             if (_spinTimer != null) _spinTimer.Start();
             SetStatus("状态：延迟测试中…");
             AppendLog("开始测试延迟（" + targets.Count + " 个节点）...");
@@ -1053,20 +1077,19 @@ namespace Win7Proxy
                     }
                     catch { }
                     n.LatencyMs = ms;
-                    SetLatencyCell(RowOfNode(n), ms < 0 ? "超时" : ms + " ms");
-                    lock (_testingLock) _testingRows.Remove(RowOfNode(n));
+                    SetLatencyCell(n, ms < 0 ? "超时" : ms + " ms");
+                    lock (_testingLock) _testingNodes.Remove(n);
                 });
 
                 // QUIC 类节点：顺序做真实延迟测试（每个都要临时拉起一个内核，不能并发）
                 foreach (var n in quicTargets)
                 {
-                    int idx = RowOfNode(n);
                     AppendLog("真实延迟测试：" + n.Remarks + "（Hysteria2/QUIC）...");
                     var coreDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreConstants.CoreDir);
                     int ms = RealLatencyTester.Test(_state.Core, n, coreDir, 8000, s => AppendLog("  " + s));
                     n.LatencyMs = ms;
-                    SetLatencyCell(idx, ms < 0 ? "失败" : ms + " ms");
-                    lock (_testingLock) _testingRows.Remove(idx);
+                    SetLatencyCell(n, ms < 0 ? "失败" : ms + " ms");
+                    lock (_testingLock) _testingNodes.Remove(n);
                 }
 
                 if (!_grid.IsDisposed)
@@ -1074,23 +1097,27 @@ namespace Win7Proxy
                     _grid.Invoke((Action)(() =>
                     {
                         if (_spinTimer != null) _spinTimer.Stop();
-                        lock (_testingLock) _testingRows.Clear();
+                        lock (_testingLock) _testingNodes.Clear();
                         if (_testBtn != null && !_testBtn.IsDisposed) _testBtn.Enabled = true;
                         UpdateStatus();
+                        // 在 UI 线程存盘：后台线程枚举 _state.Nodes 时若用户正在导入/删除节点，
+                        // 会撞上“集合已被修改”导致本次延迟结果丢失。
+                        _state.Save();
                     }));
                 }
-                _state.Save();
                 AppendLog("延迟测试完成。");
             });
         }
 
-        private void SetLatencyCell(int idx, string text)
+        /// <summary>按节点引用查找当前行号再写延迟；节点已被过滤/删除时什么都不做，绝不写错行。</summary>
+        private void SetLatencyCell(Node n, string text)
         {
-            if (idx < 0 || _grid.IsDisposed || !_grid.IsHandleCreated) return;
+            if (n == null || _grid.IsDisposed || !_grid.IsHandleCreated) return;
             try
             {
                 _grid.Invoke((Action)(() =>
                 {
+                    int idx = RowOfNode(n);
                     if (idx >= 0 && idx < _grid.Rows.Count) _grid.Rows[idx].Cells["latency"].Value = text;
                 }));
             }

@@ -23,7 +23,7 @@ namespace ProxyCore
             "dianping.com","ctrip.com","qunar.com","12306.cn","gitcode.net","gitee.com"
         };
 
-        public static string Build(ProxyMode mode, int pacPort, string rulesFilePath)
+        public static string Build(ProxyMode mode, string rulesFilePath)
         {
             if (mode == ProxyMode.Direct)
                 return Wrap("DIRECT");

@@ -202,10 +202,38 @@ namespace ProxyCore
 
             var ss = new JObject();
             var network = NetUtil.NormalizeNetwork(n.Network);
-            ss["network"] = NetworkName(spec, network);
-
             var path = string.IsNullOrEmpty(n.Path) ? "/" : n.Path;
             var host = string.IsNullOrEmpty(n.Host) ? FirstNonEmpty(n.SNI, n.Address) : n.Host;
+            var forceTls = false;
+
+            // Shadowsocks 的 SIP003 插件：Xray/V2Ray 没有 plugin 字段，
+            // 只有 v2ray-plugin 的 websocket 模式能等价映射成 ws 传输（+ 可选 TLS）；
+            // simple-obfs 无任何配置项可以表达，必须明确拒绝而不是生成一份连不上的配置。
+            if (n.Type == NodeType.Shadowsocks)
+            {
+                var plugin = SsPluginParser.Parse(n.Extra);
+                if (plugin != null)
+                {
+                    if (plugin.IsWebsocketV2rayPlugin)
+                    {
+                        network = "ws";
+                        if (!string.IsNullOrEmpty(plugin.Path)) path = plugin.Path;
+                        if (!string.IsNullOrEmpty(plugin.Host)) host = plugin.Host;
+                        forceTls = plugin.Tls;
+                    }
+                    else if (plugin.IsObfs)
+                    {
+                        throw new ProxyCoreException(
+                            "Xray/V2Ray 不支持 simple-obfs（" + plugin.Name + "）混淆插件，请切换到 sing-box 内核，或改用不带插件的节点。");
+                    }
+                    else
+                    {
+                        throw new ProxyCoreException("Xray/V2Ray 不支持的 Shadowsocks 插件：" + plugin.Name + "。");
+                    }
+                }
+            }
+
+            ss["network"] = NetworkName(spec, network);
 
             switch (network)
             {
@@ -255,7 +283,9 @@ namespace ProxyCore
             }
 
             var mode = TlsMode(spec, n);
-            var serverName = string.IsNullOrEmpty(n.SNI) ? FirstNonEmpty(n.Host, n.Address) : n.SNI;
+            // v2ray-plugin;tls 没有走节点的 security 字段，这里显式补上 TLS
+            if (forceTls && mode == "none") mode = "tls";
+            var serverName = string.IsNullOrEmpty(n.SNI) ? host : n.SNI;
 
             if (mode == "reality")
             {
