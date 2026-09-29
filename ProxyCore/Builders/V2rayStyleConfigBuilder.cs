@@ -400,6 +400,19 @@ namespace ProxyCore
 
             if (mode == ProxyMode.Rule)
             {
+                // 浏览器探测域名必须最先直连：它们不在 geosite:cn 里，若落入默认
+                // 路由会被送往代理；而 Firefox 等浏览器检测到经由代理的
+                // detectportal 响应后会进入"离线模式"，导致所有页面打不开。
+                rules.Add(new JObject {
+                    ["type"] = "field", ["outboundTag"] = "direct",
+                    ["domain"] = new JArray {
+                        "full:detectportal.firefox.com",
+                        "domain:captive.apple.com",
+                        "full:connectivitycheck.gstatic.com",
+                        "full:clients3.google.com",
+                        "full:conn1.oppomobile.com"
+                    }
+                });
                 rules.Add(new JObject {
                     ["type"] = "field", ["outboundTag"] = "block",
                     ["domain"] = new JArray { "geosite:category-ads-all" }

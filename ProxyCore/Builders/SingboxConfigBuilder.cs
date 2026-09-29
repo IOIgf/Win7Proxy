@@ -246,6 +246,18 @@ namespace ProxyCore
 
             if (mode == ProxyMode.Rule && geoDb)
             {
+                // 浏览器探测域名必须直连（与 V2rayStyleConfigBuilder 保持一致）：
+                // 若经代理返回，Firefox 会误判为离线并拒绝加载任何页面。
+                rules.Add(new JObject {
+                    ["outbound"] = "direct",
+                    ["domain"] = new JArray {
+                        "full:detectportal.firefox.com",
+                        "domain:captive.apple.com",
+                        "full:connectivitycheck.gstatic.com",
+                        "full:clients3.google.com",
+                        "full:conn1.oppomobile.com"
+                    }
+                });
                 rules.Add(new JObject { ["outbound"] = "block", ["rule_set"] = new JArray { "geosite-category-ads-all" } });
                 rules.Add(new JObject { ["outbound"] = "direct", ["rule_set"] = new JArray { "geosite-cn" } });
                 rules.Add(new JObject { ["outbound"] = "direct", ["rule_set"] = new JArray { "geoip-cn" } });

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Xunit;
 using ProxyCore;
@@ -264,6 +265,38 @@ proxies:
 
             var badPort = new Node { Type = NodeType.Trojan, Address = "1.2.3.4", Port = 0 };
             Assert.NotEmpty(NodeCompat.Warnings(badPort));
+        }
+
+        [Fact]
+        public void 规则模式_浏览器探测域名直连()
+        {
+            // Firefox 的 detectportal 若经代理返回，浏览器会误判离线并拒绝加载页面，
+            // 因此规则模式下这些探测域名必须排在所有规则之前直连。
+            var node = new Node
+            {
+                Type = NodeType.Trojan,
+                Address = "1.2.3.4",
+                Port = 443,
+                Password = "pw",
+                TLS = true
+            };
+
+            var cfg = XrayConfigBuilder.Build(node, ProxyMode.Rule).ToJson();
+            var root = JObject.Parse(cfg);
+            var rules = (JArray)root["routing"]["rules"];
+            var first = (JArray)rules[0]["domain"];
+            Assert.Contains("full:detectportal.firefox.com", first.ToObject<List<string>>());
+            Assert.Equal("direct", (string)rules[0]["outboundTag"]);
+
+            // sing-box 同样需要该规则
+            var sbCfg = SingboxConfigBuilder.BuildJson(node, ProxyMode.Rule, true, null);
+            var sbRoot = JObject.Parse(sbCfg);
+            var sbRules = (JArray)sbRoot["route"]["rules"];
+            var directRule = sbRules.Children<JObject>()
+                .FirstOrDefault(r => (string)r["outbound"] == "direct" && r["domain"] != null);
+            Assert.NotNull(directRule);
+            Assert.Contains("full:detectportal.firefox.com",
+                ((JArray)directRule["domain"]).ToObject<List<string>>());
         }
     }
 }
