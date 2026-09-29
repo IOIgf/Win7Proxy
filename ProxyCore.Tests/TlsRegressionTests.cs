@@ -47,6 +47,50 @@ namespace ProxyCore.Tests
         }
 
         [Fact]
+        public void trojan同时带security与tls参数时_tls等于1不能被忽略()
+        {
+            // 旧行为：Get(q, "security", "tls") 只取第一个非空值，链接里
+            // "security=none ... &tls=1"（Trojan-Go fallback 场景的常见导出）会被判成 none；
+            // 虽然 n.TLS=true，但生成器只认 Extra["security"]，最终写出 security:none，
+            // 以明文去连 TLS 端口 → 握手被对端拆掉，trojan 节点全部上不了网。
+            var node = V2rayNParser.ParseLink(
+                "trojan://pw@t.example.com:443?security=none&type=ws&path=/ray&host=h.example.com&tls=1&sni=t.example.com#t");
+            Assert.NotNull(node);
+            Assert.Equal("tls", node.Extra["security"]);
+
+            var stream = StreamOf(XrayConfigBuilder.BuildJson(node, ProxyMode.Global));
+            Assert.Equal("tls", (string)stream["security"]);
+            Assert.NotNull(stream["tlsSettings"]);
+            Assert.Equal("t.example.com", (string)stream["tlsSettings"]["serverName"]);
+        }
+
+        [Fact]
+        public void trojan的sni与host参数不再互相混用()
+        {
+            // host 只是 ws/h2 请求的 Host 头，不是 TLS SNI；旧实现把 host 当成 sni 的
+            // 兜底键，链接里只写 host=... 时解析出的 SNI 会错成 Host 头的值。
+            var node = V2rayNParser.ParseLink(
+                "trojan://pw@t.example.com:443?security=tls&type=ws&path=/ray&host=h.example.com#t");
+            Assert.Equal("", node.SNI);
+            Assert.Equal("h.example.com", node.Host);
+
+            // 生成器在 SNI 缺省时按 Host 兜底（保持 Xray/V2Ray 既有行为）
+            var tls = (JObject)StreamOf(XrayConfigBuilder.BuildJson(node, ProxyMode.Global))["tlsSettings"];
+            Assert.Equal("h.example.com", (string)tls["serverName"]);
+
+            // 没带 host 参数时，SNI 与 Host 头都回退到服务器地址本身。
+            var bare = V2rayNParser.ParseLink("trojan://pw@t.example.com:443?security=tls#t");
+            Assert.Equal("", bare.SNI);
+            var bareTls = (JObject)StreamOf(XrayConfigBuilder.BuildJson(bare, ProxyMode.Global))["tlsSettings"];
+            Assert.Equal("t.example.com", (string)bareTls["serverName"]);
+
+            // servername 是 vless 分支也认的 SNI 别名键，trojan 同样要支持
+            var named = V2rayNParser.ParseLink(
+                "trojan://pw@t.example.com:443?security=tls&servername=s.example.com#t");
+            Assert.Equal("s.example.com", named.SNI);
+        }
+
+        [Fact]
         public void vless用security等于1时_也应走TLS()
         {
             var node = V2rayNParser.ParseLink(

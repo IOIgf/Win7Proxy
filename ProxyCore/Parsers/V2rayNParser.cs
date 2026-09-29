@@ -179,13 +179,25 @@ namespace ProxyCore.Parsers
             n.UUID = "";
             var q = ParseQuery(uri);
 
-            var sec = NetUtil.NormalizeSecurity(Get(q, "security", "tls"));
+            // security 与 tls 是两个不同的参数键，必须分别读取再择一归一化。
+            // 旧实现写成 Get(q, "security", "tls")：Get 的语义是"取第一个【非空】值"，
+            // 当链接带 security=none（Trojan-Go 的 fallback 场景常见写法）而又有独立的
+            // tls=1 参数时，返回的是 "none" 而不是 "1"；随后 Extra["security"]="none"
+            // 会一路传到配置生成器，TlsMode 只认 Extra 里的归一化结果、不再看 n.TLS，
+            // 最终写出 streamSettings.security="none" —— 以明文去连 TLS 端口，
+            // 握手立刻被对端拆掉，表现为所有这类 trojan 节点都上不了网。
+            var secRaw = Get(q, "security");
+            var tlsRaw = Get(q, "tls");
+            var sec = NetUtil.NormalizeSecurity(
+                secRaw != "" && secRaw != "none" ? secRaw : (tlsRaw != "" ? tlsRaw : secRaw));
             n.TLS = true; // trojan 必经 TLS
             n.Extra["security"] = sec == "none" ? "tls" : sec;
             n.Network = NetUtil.NormalizeNetwork(Get(q, "type", "network"));
             n.Path = UriUnescape(Get(q, "path"));
             n.Host = UriUnescape(Get(q, "host"));
-            n.SNI = Get(q, "sni", "peer", "host");
+            // sni / peer / servername 才是 TLS SNI；host 只是 ws/h2 请求的 Host 头，
+            // 不能拿来兜底，否则证书校验会用错域名（x509: certificate is valid for ...）。
+            n.SNI = Get(q, "sni", "peer", "servername");
             n.Fingerprint = Get(q, "fp", "fingerprint");
             n.Alpn = UriUnescape(Get(q, "alpn"));
             n.ServiceName = UriUnescape(Get(q, "serviceName", "grpc-service-name"));
