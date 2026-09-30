@@ -194,9 +194,11 @@ namespace ProxyCore
                 ["insecure"] = n.AllowInsecure
             };
 
+            // 与 Xray 侧同样的原因：不能无条件塞默认 ["h2","http/1.1"]。
+            // Trojan-Go 等服务端不接受 h2 ALPN，协商失败直接断连（PR_END_OF_FILE_ERROR）。
+            // 仅在订阅显式给出 alpn 时写入；未给出时交给内核默认值。
             var alpn = NetUtil.SplitAlpn(n.Alpn);
-            if (alpn.Count == 0) alpn.AddRange(new[] { "h2", "http/1.1" });
-            tls["alpn"] = new JArray(alpn.ToArray());
+            if (alpn.Count > 0) tls["alpn"] = new JArray(alpn.ToArray());
 
             if (mode == "reality")
             {

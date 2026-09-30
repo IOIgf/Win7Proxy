@@ -223,14 +223,34 @@ proxies:
         }
 
         [Fact]
-        public void 配置_未指定alpn时使用默认值()
+        public void 配置_未指定alpn时不写入alpn字段()
         {
+            // Trojan-Go / 旧版 trojan 服务端普遍不接受 h2 ALPN。若客户端在 ClientHello
+            // 里只提出 ["h2","http/1.1"]，握手后会被直接断开（浏览器表现为
+            // PR_END_OF_FILE_ERROR）。因此订阅未显式给出 alpn 时必须【不写】alpn，
+            // 让内核使用 Go TLS 的默认行为（等价 v2rayN 等主流客户端）。
             var node = new Node { Type = NodeType.Trojan, Address = "1.2.3.4", Port = 443, Password = "pw", TLS = true };
             node.Extra["security"] = "tls";
             var root = JObject.Parse(XrayConfigBuilder.Build(node, ProxyMode.Global).ToJson());
             var ob = (JObject)((JArray)root["outbounds"])[0];
-            var alpn = (JArray)ob["streamSettings"]["tlsSettings"]["alpn"];
-            Assert.Contains("h2", alpn.ToObject<List<string>>());
+            Assert.Null(ob["streamSettings"]["tlsSettings"]["alpn"]);
+
+            // sing-box 侧同样不能塞默认值
+            var sb = JObject.Parse(SingboxConfigBuilder.BuildJson(node, ProxyMode.Global, false, null));
+            var sbOb = (JObject)((JArray)sb["outbounds"])[0];
+            Assert.Null(sbOb["tls"]["alpn"]);
+        }
+
+        [Fact]
+        public void 配置_订阅显式给出alpn时原样写入()
+        {
+            var node = new Node { Type = NodeType.Trojan, Address = "1.2.3.4", Port = 443,
+                                  Password = "pw", TLS = true, Alpn = "http/1.1" };
+            node.Extra["security"] = "tls";
+            var root = JObject.Parse(XrayConfigBuilder.Build(node, ProxyMode.Global).ToJson());
+            var ob = (JObject)((JArray)root["outbounds"])[0];
+            var alpn = ((JArray)ob["streamSettings"]["tlsSettings"]["alpn"]).ToObject<List<string>>();
+            Assert.Equal(new[] { "http/1.1" }, alpn);
         }
 
         [Fact]

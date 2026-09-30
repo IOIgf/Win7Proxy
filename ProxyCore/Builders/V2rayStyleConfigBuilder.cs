@@ -307,9 +307,14 @@ namespace ProxyCore
                 ApplyCertTrust(spec, n, tls);
                 if (!string.IsNullOrEmpty(n.Fingerprint)) tls["fingerprint"] = n.Fingerprint;
 
+                // ALPN 只在订阅显式给出时才写入。此前无条件默认 ["h2","http/1.1"]，
+                // 而 Trojan-Go / 旧版 trojan 服务端普遍不接受 h2 ALPN：客户端在 TLS
+                // ClientHello 里只提出 h2，服务端协商失败直接断开连接，Xray 侧表现
+                // 为握手后立刻 EOF（浏览器报 PR_END_OF_FILE_ERROR），所有不带 alpn
+                // 参数的 trojan 节点都连不上。不写 alpn 时由 Go 的 TLS 栈使用默认
+                // ALPN（http/1.1），与 v2rayN 等主流客户端行为一致。
                 var alpn = NetUtil.SplitAlpn(n.Alpn);
-                if (alpn.Count == 0) alpn.AddRange(new[] { "h2", "http/1.1" });
-                tls["alpn"] = new JArray(alpn.ToArray());
+                if (alpn.Count > 0) tls["alpn"] = new JArray(alpn.ToArray());
 
                 ss["tlsSettings"] = tls;
             }
